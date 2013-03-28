@@ -82,6 +82,9 @@ class OGRCSVLayer : public OGRLayer
     /* GNIS specific */
     int                 iLongitudeField, iLatitudeField;
 
+    int                 bIsEurostatTSV;
+    int                 nEurostatDims;
+
     int                 nTotalFeatures;
 
   public:
@@ -109,6 +112,8 @@ class OGRCSVLayer : public OGRLayer
     void                SetWriteBOM(int bWriteBOM);
 
     virtual int         GetFeatureCount( int bForce = TRUE );
+
+    OGRErr              WriteHeader();
 };
 
 /************************************************************************/
@@ -152,6 +157,8 @@ class OGRCSVDataSource : public OGRDataSource
 
     void                SetDefaultCSVName( const char *pszName ) 
         { osDefaultCSVName = pszName; }
+
+    static CPLString    GetRealExtension(CPLString osFilename);
 };
 
 /************************************************************************/

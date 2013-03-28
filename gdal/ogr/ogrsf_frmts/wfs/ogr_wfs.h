@@ -83,7 +83,10 @@ class OGRWFSLayer : public OGRLayer
 
     CPLString           osGeometryColumnName;
     OGRwkbGeometryType  eGeomType;
-    int nFeatures;
+    int                 nFeatures;
+    int                 bCountFeaturesInGetNextFeature;
+
+    int                 CanRunGetFeatureCountAndGetExtentTogether();
 
     CPLString           MakeGetFeatureURL(int nMaxFeatures, int bRequestHits);
     int                 MustRetryIfNonCompliantServer(const char* pszServerAnswer);
@@ -230,6 +233,7 @@ class OGRWFSDataSource : public OGRDataSource
 
     int                 bPagingAllowed;
     int                 nPageSize;
+    int                 nBaseStartIndex;
 
     int                 bIsGEOSERVER;
 
@@ -296,8 +300,9 @@ class OGRWFSDataSource : public OGRDataSource
 
     CPLHTTPResult*              HTTPFetch( const char* pszURL, char** papszOptions );
 
-    int                         IsPagingAllowed() { return bPagingAllowed; }
-    int                         GetPageSize() { return nPageSize; }
+    int                         IsPagingAllowed() const { return bPagingAllowed; }
+    int                         GetPageSize() const { return nPageSize; }
+    int                         GetBaseStartIndex() const { return nBaseStartIndex; }
 
     void                        LoadMultipleLayerDefn(const char* pszLayerName,
                                                       char* pszNS, char* pszNSVal);

@@ -29,6 +29,8 @@
 
 #include "netcdfdataset.h"
 #include "cpl_error.h"
+#include "cpl_multiproc.h"
+
 CPL_CVSID("$Id$");
 
 #include <map> //for NCDFWriteProjAttribs()
@@ -75,6 +77,8 @@ char **NCDFTokenizeArray( const char *pszValue );//replace this where used
 void CopyMetadata( void  *poDS, int fpImage, int CDFVarID, 
                    const char *pszMatchPrefix=NULL, int bIsBand=TRUE );
 
+
+void *hNCMutex = NULL;
 
 /************************************************************************/
 /* ==================================================================== */
@@ -624,6 +628,8 @@ double netCDFRasterBand::GetOffset( int *pbSuccess )
 /************************************************************************/ 
 CPLErr netCDFRasterBand::SetOffset( double dfNewOffset ) 
 { 
+    CPLMutexHolderD(&hNCMutex);
+
     dfOffset = dfNewOffset; 
 
     /* write value if in update mode */
@@ -661,6 +667,8 @@ double netCDFRasterBand::GetScale( int *pbSuccess )
 /************************************************************************/ 
 CPLErr netCDFRasterBand::SetScale( double dfNewScale )  
 { 
+    CPLMutexHolderD(&hNCMutex);
+
     dfScale = dfNewScale; 
 
     /* write value if in update mode */
@@ -707,6 +715,8 @@ double netCDFRasterBand::GetNoDataValue( int * pbSuccess )
 CPLErr netCDFRasterBand::SetNoDataValue( double dfNoData )
 
 {
+    CPLMutexHolderD(&hNCMutex);
+
     /* If already set to new value, don't do anything */
     if ( bNoDataSet && CPLIsEqual( dfNoData, dfNoDataValue ) )
         return CE_None;
@@ -1079,6 +1089,8 @@ CPLErr netCDFRasterBand::IReadBlock( int nBlockXOff, int nBlockYOff,
     int    Taken=-1;
     int    nd;
 
+    CPLMutexHolderD(&hNCMutex);
+
 #ifdef NCDF_DEBUG
     if ( (nBlockYOff == 0) || (nBlockYOff == nRasterYSize-1) )
         CPLDebug( "GDAL_netCDF", "netCDFRasterBand::IReadBlock( %d, %d, ... ) nBand=%d",
@@ -1220,6 +1232,8 @@ CPLErr netCDFRasterBand::IWriteBlock( int nBlockXOff, int nBlockYOff,
     int    Sum=-1;
     int    Taken=-1;
     int    nd;
+
+    CPLMutexHolderD(&hNCMutex);
 
 #ifdef NCDF_DEBUG
     if ( (nBlockYOff == 0) || (nBlockYOff == nRasterYSize-1) )
@@ -1391,6 +1405,8 @@ netCDFDataset::netCDFDataset()
 netCDFDataset::~netCDFDataset()
 
 {
+    CPLMutexHolderD(&hNCMutex);
+
     #ifdef NCDF_DEBUG
     CPLDebug( "GDAL_netCDF", "netCDFDataset::~netCDFDataset(), cdfid=%d",
               cdfid );
@@ -1429,6 +1445,7 @@ netCDFDataset::~netCDFDataset()
         status = nc_close( cdfid );
         NCDF_ERR(status);
     }
+
 }
 
 /************************************************************************/
@@ -1650,6 +1667,8 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
     int          nSpacingBegin=0;
     int          nSpacingMiddle=0;
     int          nSpacingLast=0;
+    int          bLatSpacingOK=FALSE;
+    int          bLonSpacingOK=FALSE;
     size_t       xdim = nRasterXSize;
     size_t       ydim = nRasterYSize;
 
@@ -1679,6 +1698,13 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
     adfTempGeoTransform[4] = 0.0;
     adfTempGeoTransform[5] = 1.0;
     pszTempProjection = NULL;
+
+    if ( xdim == 1 || ydim == 1 ) {
+        CPLError( CE_Warning, CPLE_AppDefined, 
+                  "1-pixel width/height files not supported, xdim: %ld ydim: %ld",
+                  (long)xdim, (long)ydim );
+        return;
+    }
 
 /* -------------------------------------------------------------------- */
 /*      Look for grid_mapping metadata                                  */
@@ -2466,24 +2492,46 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
 /*      Check Longitude                                                 */
 /* -------------------------------------------------------------------- */
 
-        nSpacingBegin   = (int) poDS->rint((pdfXCoord[1]-pdfXCoord[0]) * 1000);
-	
-        nSpacingMiddle  = (int) poDS->rint((pdfXCoord[xdim / 2] - 
-                                            pdfXCoord[(xdim / 2) + 1]) * 1000);
-	
-        nSpacingLast    = (int) poDS->rint((pdfXCoord[xdim - 2] - 
-                                            pdfXCoord[xdim-1]) * 1000);
+        if( xdim == 2 ) {
+            bLonSpacingOK = TRUE;
+        }
+        else
+        {
+            nSpacingBegin   = (int) poDS->rint((pdfXCoord[1] - pdfXCoord[0]) * 1000);
+            
+            nSpacingMiddle  = (int) poDS->rint((pdfXCoord[xdim / 2] - 
+                                                pdfXCoord[(xdim / 2) + 1]) * 1000);
+            
+            nSpacingLast    = (int) poDS->rint((pdfXCoord[xdim - 2] - 
+                                                pdfXCoord[xdim-1]) * 1000);       
+            
+            CPLDebug("GDAL_netCDF", 
+                     "xdim: %ld nSpacingBegin: %d nSpacingMiddle: %d nSpacingLast: %d",
+                     (long)xdim, nSpacingBegin, nSpacingMiddle, nSpacingLast );
+            
+            if( ( abs( nSpacingBegin )  ==  abs( nSpacingLast )   ) &&
+                ( abs( nSpacingBegin )  ==  abs( nSpacingMiddle ) ) &&
+                ( abs( nSpacingMiddle ) ==  abs( nSpacingLast )   ) ) {
+                bLonSpacingOK = TRUE;
+            }
+        }
 
-        if( ( abs( nSpacingBegin )  ==  abs( nSpacingLast )     )  &&
-            ( abs( nSpacingBegin )  ==  abs( nSpacingMiddle )   ) &&
-            ( abs( nSpacingMiddle ) ==  abs( nSpacingLast )     ) ) {
+        if ( bLonSpacingOK == FALSE ) {
+            CPLDebug( "GDAL_netCDF", 
+                      "Longitude is not equally spaced." );
+        }
+                
+/* -------------------------------------------------------------------- */
+/*      Check Latitude                                                  */
+/* -------------------------------------------------------------------- */
+        if( ydim == 2 ) {
+            bLatSpacingOK = TRUE;
+        }
+        else
+        {
+            nSpacingBegin   = (int) poDS->rint((pdfYCoord[1] - pdfYCoord[0]) * 
+                                               1000); 	    
 
-/* -------------------------------------------------------------------- */
-/*      Longitude is equally spaced, check latitude                     */
-/* -------------------------------------------------------------------- */
-            nSpacingBegin   = (int) poDS->rint((pdfYCoord[1]-pdfYCoord[0]) * 
-                                               1000); 
-	    
             nSpacingMiddle  = (int) poDS->rint((pdfYCoord[ydim / 2] - 
                                                 pdfYCoord[(ydim / 2) + 1]) * 
                                                1000);
@@ -2491,20 +2539,26 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
             nSpacingLast    = (int) poDS->rint((pdfYCoord[ydim - 2] - 
                                                 pdfYCoord[ydim-1]) * 
                                                1000);
-   
+
+            CPLDebug("GDAL_netCDF", 
+                     "ydim: %ld nSpacingBegin: %d nSpacingMiddle: %d nSpacingLast: %d",
+                     (long)ydim, nSpacingBegin, nSpacingMiddle, nSpacingLast );
+
 /* -------------------------------------------------------------------- */
 /*   For Latitude we allow an error of 0.1 degrees for gaussian         */
 /*   gridding                                                           */
 /* -------------------------------------------------------------------- */
 
-            if((( abs( abs(nSpacingBegin) - abs(nSpacingLast) ) )   < 100 ) &&
-               (( abs( abs(nSpacingBegin) -  abs(nSpacingMiddle) ) ) < 100 ) &&
-               (( abs( abs(nSpacingMiddle) - abs(nSpacingLast) ) )   < 100) ) {
+            if( (( abs( abs(nSpacingBegin)  - abs(nSpacingLast) ) )   < 100 ) &&
+                (( abs( abs(nSpacingBegin)  - abs(nSpacingMiddle) ) ) < 100 ) &&
+                (( abs( abs(nSpacingMiddle) - abs(nSpacingLast) ) )   < 100 ) ) {
 
-                if( ( abs( nSpacingBegin )  !=  abs( nSpacingLast )     )  ||
-                    ( abs( nSpacingBegin )  !=  abs( nSpacingMiddle )   ) ||
-                    ( abs( nSpacingMiddle ) !=  abs( nSpacingLast )     ) ) {
-		    
+                bLatSpacingOK = TRUE;
+
+                if( ( abs( nSpacingBegin )  !=  abs( nSpacingLast )   ) ||
+                    ( abs( nSpacingBegin )  !=  abs( nSpacingMiddle ) ) ||
+                    ( abs( nSpacingMiddle ) !=  abs( nSpacingLast )   ) ) {
+                
                     CPLError(CE_Warning, 1,"Latitude grid not spaced evenly.\nSeting projection for grid spacing is within 0.1 degrees threshold.\n");
 
                     CPLDebug("GDAL_netCDF", 
@@ -2513,6 +2567,16 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
                     Set1DGeolocation( nVarDimYID, "Y" );
 
                 }
+            }
+        }
+        
+        if ( bLatSpacingOK == FALSE ) {
+            CPLDebug( "GDAL_netCDF", 
+                      "Latitude is not equally spaced." );
+        }
+
+        if ( ( bLonSpacingOK == TRUE ) && ( bLatSpacingOK == TRUE ) ) {      
+
 /* -------------------------------------------------------------------- */
 /*      We have gridded data so we can set the Gereferencing info.      */
 /* -------------------------------------------------------------------- */
@@ -2577,15 +2641,7 @@ void netCDFDataset::SetProjectionFromVar( int nVarId )
                     adfTempGeoTransform[0] -= (adfTempGeoTransform[1] / 2);
                     adfTempGeoTransform[3] -= (adfTempGeoTransform[5] / 2);
                 }
-            }// end if (Latitude is equally spaced, within 0.1 degrees)
-            else {
-                CPLDebug( "GDAL_netCDF", 
-                          "Latitude is not equally spaced." );
-            }
-        }// end if (Longitude is equally spaced)
-        else {
-            CPLDebug( "GDAL_netCDF", 
-                      "Longitude is not equally spaced." );
+
         }
 
         CPLFree( pdfXCoord );
@@ -2971,6 +3027,8 @@ double *netCDFDataset::Get1DGeolocation( const char *szDimName, int &nVarLen )
 /************************************************************************/
 CPLErr 	netCDFDataset::SetProjection( const char * pszNewProjection )
 {
+    CPLMutexHolderD(&hNCMutex);
+
 /* TODO look if proj. already defined, like in geotiff */
     if( pszNewProjection == NULL ) 
     {
@@ -3023,6 +3081,8 @@ CPLErr 	netCDFDataset::SetProjection( const char * pszNewProjection )
 
 CPLErr 	netCDFDataset::SetGeoTransform ( double * padfTransform )
 {
+    CPLMutexHolderD(&hNCMutex);
+
     memcpy( adfGeoTransform, padfTransform, sizeof(double)*6 );
     // bGeoTransformValid = TRUE;
     // bGeoTIFFInfoChanged = TRUE;
@@ -3972,18 +4032,16 @@ void netCDFDataset::CreateSubDatasetList( )
             switch( nVarType ) {
 		
                 case NC_BYTE:
-#ifdef NETCDF_HAS_NC4
-                case NC_UBYTE:
-#endif    
+                    strcpy(szType, "8-bit integer");
+                    break;
                 case NC_CHAR:
                     strcpy(szType, "8-bit character");
                     break;
-
                 case NC_SHORT: 
-                    strcpy(szType, "8-bit integer");
+                    strcpy(szType, "16-bit integer");
                     break;
                 case NC_INT:
-                    strcpy(szType, "16-bit integer");
+                    strcpy(szType, "32-bit integer");
                     break;
                 case NC_FLOAT:
                     strcpy(szType, "32-bit floating-point");
@@ -3991,7 +4049,23 @@ void netCDFDataset::CreateSubDatasetList( )
                 case NC_DOUBLE:
                     strcpy(szType, "64-bit floating-point");
                     break;
-
+#ifdef NETCDF_HAS_NC4
+                case NC_UBYTE:
+                    strcpy(szType, "8-bit unsigned integer");
+                    break;
+                case NC_USHORT: 
+                    strcpy(szType, "16-bit unsigned integer");
+                    break;
+                case NC_UINT:
+                    strcpy(szType, "32-bit unsigned integer");
+                    break;
+                case NC_INT64:
+                    strcpy(szType, "64-bit integer");
+                    break;
+                case NC_UINT64:
+                    strcpy(szType, "64-bit unsigned integer");
+                    break;
+#endif    
                 default:
                     break;
             }
@@ -4172,8 +4246,12 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
             return NULL;
     }
 
+    CPLMutexHolderD(&hNCMutex);
+
     netCDFDataset 	*poDS;
+    CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
     poDS = new netCDFDataset();
+    CPLAcquireMutex(hNCMutex, 1000.0);
 
     poDS->SetDescription( poOpenInfo->pszFilename );
     
@@ -4217,7 +4295,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
         else
         {
             CSLDestroy( papszName );
+            CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
             delete poDS;
+            CPLAcquireMutex(hNCMutex, 1000.0);
             CPLError( CE_Failure, CPLE_AppDefined,
                       "Failed to parse NETCDF: prefix string into expected 2, 3 or 4 fields." );
             return NULL;
@@ -4228,7 +4308,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
         delete poOpenInfo2;
         if( NCDF_FORMAT_NONE == poDS->nFormat ||
             NCDF_FORMAT_UNKNOWN == poDS->nFormat ) {
+            CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
             delete poDS;
+            CPLAcquireMutex(hNCMutex, 1000.0);
             return NULL;
         }        
     }
@@ -4244,7 +4326,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
 /* -------------------------------------------------------------------- */
     CPLDebug( "GDAL_netCDF", "\n=====\ncalling nc_open( %s )", poDS->osFilename.c_str() );
     if( nc_open( poDS->osFilename, NC_NOWRITE, &cdfid ) != NC_NOERR ) {
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }
     CPLDebug( "GDAL_netCDF", "got cdfid=%d\n", cdfid );
@@ -4254,7 +4338,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
 /* -------------------------------------------------------------------- */
     status = nc_inq(cdfid, &ndims, &nvars, &ngatts, &unlimdimid);
     if( status != NC_NOERR ) {
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }   
 
@@ -4292,7 +4378,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
                   "The NETCDF driver does not support update access to existing"
                   " datasets.\n" );
         nc_close( cdfid );
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }
     
@@ -4309,7 +4397,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
                       osSubdatasetName.c_str() );
             
             nc_close( cdfid );
+            CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
             delete poDS;
+            CPLAcquireMutex(hNCMutex, 1000.0);
             return NULL;
         }
     }
@@ -4321,7 +4411,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
                   poOpenInfo->pszFilename );
 
         nc_close( cdfid );
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }
 
@@ -4341,7 +4433,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
 /* -------------------------------------------------------------------- */
     if ( nc_inq_nvars ( cdfid, &var_count) != NC_NOERR )
     {
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }    
     
@@ -4408,7 +4502,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
     {
         poDS->CreateSubDatasetList();
         poDS->SetMetadata( poDS->papszMetadata );
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         poDS->TryLoadXML();
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return( poDS );
     }
 
@@ -4457,7 +4553,9 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
                   "Variable has %d dimension(s) - not supported.", nd );
         CPLFree( paDimIds );
         CPLFree( panBandDimPos );
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }
 
@@ -4677,13 +4775,16 @@ GDALDataset *netCDFDataset::Open( GDALOpenInfo * poOpenInfo )
         poDS->SetPhysicalFilename( poDS->osFilename );
         poDS->SetSubdatasetName( osSubdatasetName );
     }
-    
+
+    CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
     poDS->TryLoadXML();
 
     if( bTreatAsSubdataset )
         poDS->oOvManager.Initialize( poDS, ":::VIRTUAL:::" );
     else
         poDS->oOvManager.Initialize( poDS, poDS->osFilename );
+
+    CPLAcquireMutex(hNCMutex, 1000.0);
 
     return( poDS );
 }
@@ -4831,7 +4932,10 @@ netCDFDataset::CreateLL( const char * pszFilename,
     int status = NC_NOERR;
     netCDFDataset *poDS;
     
+    CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
     poDS = new netCDFDataset();
+    CPLAcquireMutex(hNCMutex, 1000.0);
+
     poDS->nRasterXSize = nXSize;
     poDS->nRasterYSize = nYSize;
     poDS->eAccess = GA_Update;
@@ -4863,7 +4967,9 @@ netCDFDataset::CreateLL( const char * pszFilename,
         CPLError( CE_Failure, CPLE_OpenFailed, 
                   "Unable to create netCDF file %s (Error code %d): %s .\n", 
                   pszFilename, status, nc_strerror(status) );
+        CPLReleaseMutex(hNCMutex); // Release mutex otherwise we'll deadlock with GDALDataset own mutex
         delete poDS;
+        CPLAcquireMutex(hNCMutex, 1000.0);
         return NULL;
     }
 
@@ -4903,7 +5009,9 @@ netCDFDataset::Create( const char * pszFilename,
     CPLDebug( "GDAL_netCDF", 
               "\n=====\nnetCDFDataset::Create( %s, ... )\n", 
               pszFilename );
-    
+
+    CPLMutexHolderD(&hNCMutex);
+
     poDS =  netCDFDataset::CreateLL( pszFilename,
                                      nXSize, nYSize, nBands,
                                      papszOptions );
@@ -5022,6 +5130,8 @@ netCDFDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     GDALRasterBand *poSrcBand = NULL;
     GDALRasterBand *poDstBand = NULL;
     int nBandID = -1;
+
+    CPLMutexHolderD(&hNCMutex);
 
     CPLDebug( "GDAL_netCDF", 
               "\n=====\nnetCDFDataset::CreateCopy( %s, ... )\n", 
@@ -5501,6 +5611,16 @@ int netCDFDataset::DefVarDeflate( int nVarId, int bChunking )
     return NC_NOERR;
 }
 
+/************************************************************************/
+/*                           NCDFUnloadDriver()                         */
+/************************************************************************/
+
+static void NCDFUnloadDriver(GDALDriver* poDriver)
+{
+    if( hNCMutex != NULL )
+        CPLDestroyMutex(hNCMutex);
+    hNCMutex = NULL;
+}
 
 /************************************************************************/
 /*                          GDALRegister_netCDF()                       */
@@ -5572,6 +5692,7 @@ void GDALRegister_netCDF()
         poDriver->SetMetadataItem( GDAL_DMD_EXTENSION, "nc" );
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST, 
                                    szCreateOptions );
+        poDriver->SetMetadataItem( GDAL_DMD_SUBDATASETS, "YES" );
 
         /* make driver config and capabilities available */
         poDriver->SetMetadataItem( "NETCDF_VERSION", nc_inq_libvers() );
@@ -5597,6 +5718,7 @@ void GDALRegister_netCDF()
         poDriver->pfnCreateCopy = netCDFDataset::CreateCopy;
         poDriver->pfnCreate = netCDFDataset::Create;
         poDriver->pfnIdentify = netCDFDataset::Identify;
+        poDriver->pfnUnloadDriver = NCDFUnloadDriver;
 
         GetGDALDriverManager( )->RegisterDriver( poDriver );
     }
@@ -5618,6 +5740,9 @@ int NCDFIsGDALVersionGTE(const char* pszVersion, int nTarget)
         return FALSE;
     else if ( ! EQUALN("GDAL ", pszVersion, 5) )
         return FALSE;
+    /* 2.0dev of 2011/12/29 has been later renamed as 1.10dev */
+    else if ( EQUAL("GDAL 2.0dev, released 2011/12/29", pszVersion) )
+        return nTarget <= GDAL_COMPUTE_VERSION(1,10,0);
     else if ( EQUALN("GDAL 1.9dev", pszVersion,11 ) )
         return nTarget <= 1900;
     else if ( EQUALN("GDAL 1.8dev", pszVersion,11 ) )
@@ -5628,9 +5753,11 @@ int NCDFIsGDALVersionGTE(const char* pszVersion, int nTarget)
     for ( int iToken = 0; papszTokens && papszTokens[iToken]; iToken++ )  {
         nVersions[iToken] = atoi( papszTokens[iToken] );
     }
-    /* (GDAL_VERSION_MAJOR*1000+GDAL_VERSION_MINOR*100+GDAL_VERSION_REV*10+GDAL_VERSION_BUILD) */
-    nVersion = nVersions[0]*1000 + nVersions[1]*100 + 
-        nVersions[2]*10 + nVersions[3]; 
+    if( nVersions[0] > 1 || nVersions[1] >= 10 )
+        nVersion = GDAL_COMPUTE_VERSION( nVersions[0], nVersions[1], nVersions[2] );
+    else
+        nVersion = nVersions[0]*1000 + nVersions[1]*100 + 
+            nVersions[2]*10 + nVersions[3]; 
     
     CSLDestroy( papszTokens );
     return nTarget <= nVersion;
@@ -5835,7 +5962,7 @@ void NCDFWriteProjAttribs( const OGR_SRSNode *poPROJCS,
                     double dfLatPole = 0.0;
                     if ( dfValue > 0.0) dfLatPole = 90.0;
                     else dfLatPole = -90.0;
-                        oOutList.push_back( std::make_pair( CF_PP_LAT_PROJ_ORIGIN, 
+                        oOutList.push_back( std::make_pair( std::string(CF_PP_LAT_PROJ_ORIGIN), 
                                                             dfLatPole ) );
                 }              
 
@@ -5859,7 +5986,7 @@ void NCDFWriteProjAttribs( const OGR_SRSNode *poPROJCS,
                         else {                      
                             oValIter2 = oValMap.find( std::string(SRS_PP_LATITUDE_OF_ORIGIN) );
                             if (oValIter2 != oValMap.end() ) {
-                                oOutList.push_back( std::make_pair( CF_PP_STD_PARALLEL_1, 
+                                oOutList.push_back( std::make_pair( std::string(CF_PP_STD_PARALLEL_1), 
                                                                     oValIter2->second) );
                             }
                             else {
@@ -5892,9 +6019,9 @@ void NCDFWriteProjAttribs( const OGR_SRSNode *poPROJCS,
             }
             /* for SRS_PP_SCALE_FACTOR write 2 mappings */
             else if (  EQUAL(pszGDALAtt->c_str(), SRS_PP_SCALE_FACTOR) ) {
-                oOutList.push_back( std::make_pair( CF_PP_SCALE_FACTOR_MERIDIAN,
+                oOutList.push_back( std::make_pair( std::string(CF_PP_SCALE_FACTOR_MERIDIAN),
                                                     dfValue ) );
-                oOutList.push_back( std::make_pair( CF_PP_SCALE_FACTOR_ORIGIN,
+                oOutList.push_back( std::make_pair( std::string(CF_PP_SCALE_FACTOR_ORIGIN),
                                                     dfValue ) );
             }
             /* if not found insert the GDAL name */

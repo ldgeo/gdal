@@ -63,7 +63,7 @@ CPL_C_END
 /************************
  * \brief Constructor
  ************************/
-PostGISRasterDataset::PostGISRasterDataset(ResolutionStrategy inResolutionStrategy = AVERAGE_RESOLUTION) {
+PostGISRasterDataset::PostGISRasterDataset(ResolutionStrategy inResolutionStrategy) {
     pszOriginalConnectionString = NULL;
     papszSubdatasets = NULL;
     nSrid = -1;
@@ -357,7 +357,6 @@ GBool PostGISRasterDataset::SetRasterProperties
     int i = 0;
     int nTuples = 0;
     int nRasterID = 0;
-    GBool bRetValue = false;
     char* pszIdColumn = NULL;
     double tileUpperLeftX;
     double tileUpperLeftY;
@@ -2050,6 +2049,7 @@ void GDALRegister_PostGISRaster() {
         poDriver->SetDescription("PostGISRaster");
         poDriver->SetMetadataItem(GDAL_DMD_LONGNAME,
                 "PostGIS Raster driver");
+        poDriver->SetMetadataItem( GDAL_DMD_SUBDATASETS, "YES" );
 
         poDriver->pfnOpen = PostGISRasterDataset::Open;
         poDriver->pfnCreateCopy = PostGISRasterDataset::CreateCopy;

@@ -276,7 +276,12 @@ int NTFFileReader::Open( const char * pszFilenameIn )
     }
 
     nNTFLevel = atoi(oVHR.GetField( 57, 57 ));
-    CPLAssert( nNTFLevel >= 1 && nNTFLevel <= 5 );
+    if( !( nNTFLevel >= 1 && nNTFLevel <= 5 ) )
+    {
+        CPLError( CE_Failure, CPLE_AppDefined, 
+                  "Invalid value : nNTFLevel = %d", nNTFLevel );
+        return FALSE;
+    }
 
 /* -------------------------------------------------------------------- */
 /*      Read records till we get the section header.                    */
@@ -399,6 +404,15 @@ int NTFFileReader::Open( const char * pszFilenameIn )
         delete poRecord;
         CPLError( CE_Failure, CPLE_AppDefined,
                   "Cound not find section header record in %s.\n", 
+                  pszFilename );
+        return FALSE;
+    }
+
+    if( pszProduct == NULL )
+    {
+        delete poRecord;
+        CPLError( CE_Failure, CPLE_AppDefined,
+                  "Cound not find product type in %s.\n", 
                   pszFilename );
         return FALSE;
     }

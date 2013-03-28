@@ -1721,6 +1721,171 @@ def test_ogr2ogr_45():
 
     return 'success'
 
+###############################################################################
+# Test -gcp (#4604)
+
+def test_ogr2ogr_46():
+
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    try:
+        os.stat('tmp/test_ogr2ogr_46_src.shp')
+        ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/test_ogr2ogr_46_src.shp')
+    except:
+        pass
+
+    try:
+        os.unlink('tmp/test_ogr2ogr_46.gml')
+        os.unlink('tmp/test_ogr2ogr_46.xsd')
+    except:
+        pass
+
+    ds = ogr.GetDriverByName('ESRI Shapefile').CreateDataSource('tmp/test_ogr2ogr_46_src.shp')
+    lyr = ds.CreateLayer('test_ogr2ogr_46_src', geom_type = ogr.wkbPoint)
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetGeometry(ogr.CreateGeometryFromWkt('POINT(0 0)'))
+    lyr.CreateFeature(feat)
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetGeometry(ogr.CreateGeometryFromWkt('POINT(1 1)'))
+    lyr.CreateFeature(feat)
+    ds = None
+
+    for option in ['', ' -tps', ' -order 1', ' -a_srs EPSG:4326', ' -s_srs EPSG:4326 -t_srs EPSG:3857']:
+        gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GML tmp/test_ogr2ogr_46.gml tmp/test_ogr2ogr_46_src.shp -gcp 0 0 2 49 -gcp 0 1 2 50 -gcp 1 0 3 49%s' % option)
+
+        f = open('tmp/test_ogr2ogr_46.gml')
+        data = f.read()
+        f.close()
+
+        if data.find('2,49') == -1 and data.find('222638.') == -1:
+            gdaltest.post_reason('failure')
+            print(option)
+            print(data)
+            return 'fail'
+
+        if data.find('3,50') == -1 and data.find('333958.') == -1:
+            gdaltest.post_reason('failure')
+            print(option)
+            print(data)
+            return 'fail'
+
+        os.unlink('tmp/test_ogr2ogr_46.gml')
+        os.unlink('tmp/test_ogr2ogr_46.xsd')
+
+    ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/test_ogr2ogr_46_src.shp')
+
+    return 'success'
+
+###############################################################################
+# Test reprojection with features with different SRS
+
+def test_ogr2ogr_47():
+
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    f = open('tmp/test_ogr2ogr_47_src.gml', 'wt')
+    f.write("""<foo xmlns:gml="http://www.opengis.net/gml">
+   <gml:featureMember>
+      <features>
+         <geometry>
+            <gml:Point srsName="http://www.opengis.net/gml/srs/epsg.xml#32630">
+               <gml:coordinates>500000,4500000</gml:coordinates>
+            </gml:Point>
+         </geometry>
+      </features>
+   </gml:featureMember>
+   <gml:featureMember>
+      <features >
+         <geometry>
+            <gml:Point srsName="http://www.opengis.net/gml/srs/epsg.xml#32631">
+               <gml:coordinates>500000,4500000</gml:coordinates>
+            </gml:Point>
+         </geometry>
+      </features>
+   </gml:featureMember>
+</foo>""")
+    f.close()
+
+    try:
+        os.unlink('tmp/test_ogr2ogr_47_src.gfs')
+    except:
+        pass
+
+    try:
+        ds = ogr.Open('tmp/test_ogr2ogr_47_src.gml')
+    except:
+        ds = None
+
+    if ds is None:
+        os.unlink('tmp/test_ogr2ogr_47_src.gml')
+        return 'skip'
+    ds = None
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -f GML -t_srs EPSG:4326 tmp/test_ogr2ogr_47_dst.gml tmp/test_ogr2ogr_47_src.gml')
+
+    f = open('tmp/test_ogr2ogr_47_dst.gml')
+    data = f.read()
+    f.close()
+
+    if data.find('>-3.0,40.65') == -1 and data.find('<3.0,40.65') == -1:
+        gdaltest.post_reason('failure')
+        print(data)
+        return 'fail'
+
+    os.unlink('tmp/test_ogr2ogr_47_dst.gml')
+    os.unlink('tmp/test_ogr2ogr_47_dst.xsd')
+
+    os.unlink('tmp/test_ogr2ogr_47_src.gml')
+    os.unlink('tmp/test_ogr2ogr_47_src.gfs')
+
+    return 'success'
+
+###############################################################################
+# Test fieldmap option
+
+def test_ogr2ogr_48():
+    if test_cli_utilities.get_ogr2ogr_path() is None:
+        return 'skip'
+
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' tmp data/Fields.csv')
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -append -fieldmap identity tmp data/Fields.csv')
+    gdaltest.runexternal(test_cli_utilities.get_ogr2ogr_path() + ' -append -fieldmap 14,13,12,11,10,9,8,7,6,5,4,3,2,1,0 tmp data/Fields.csv')
+    
+    ds = ogr.Open('tmp/Fields.dbf')
+
+    if ds is None:
+        return 'fail'
+    layer_defn = ds.GetLayer(0).GetLayerDefn()
+    if layer_defn.GetFieldCount() != 15:
+        gdaltest.post_reason('Unexpected field count: ' + str(ds.GetLayer(0).GetLayerDefn().GetFieldCount()) )
+        ds.Destroy()
+        ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/Fields.dbf')
+        return 'fail'
+
+    error_occured = False
+    lyr = ds.GetLayer(0)
+    lyr.GetNextFeature()
+    feat = lyr.GetNextFeature()    
+    for i in range( layer_defn.GetFieldCount() ):
+        if feat.GetFieldAsString(i) != str(i + 1):
+            print('Expected the value ', str(i + 1),',but got',feat.GetFieldAsString(i))
+            error_occured = True
+    feat = lyr.GetNextFeature()    
+    for i in range( layer_defn.GetFieldCount() ):
+        if feat.GetFieldAsString(i) != str(layer_defn.GetFieldCount() - i):
+            print('Expected the value ', str(layer_defn.GetFieldCount() - i),',but got',feat.GetFieldAsString(i))
+            error_occured = True
+
+    ds.Destroy()
+    ogr.GetDriverByName('ESRI Shapefile').DeleteDataSource('tmp/Fields.dbf')
+
+    if error_occured:
+        return 'fail'
+
+    return 'success'
+
 gdaltest_list = [
     test_ogr2ogr_1,
     test_ogr2ogr_2,
@@ -1766,9 +1931,12 @@ gdaltest_list = [
     test_ogr2ogr_42,
     test_ogr2ogr_43,
     test_ogr2ogr_44,
-    test_ogr2ogr_45
+    test_ogr2ogr_45,
+    test_ogr2ogr_46,
+    test_ogr2ogr_47,
+    test_ogr2ogr_48
     ]
-    
+
 if __name__ == '__main__':
 
     gdaltest.setup_run( 'test_ogr2ogr' )

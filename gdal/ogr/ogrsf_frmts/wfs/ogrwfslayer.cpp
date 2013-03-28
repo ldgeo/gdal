@@ -108,6 +108,7 @@ OGRWFSLayer::OGRWFSLayer( OGRWFSDataSource* poDS,
     bHasFetched = FALSE;
     eGeomType = wkbUnknown;
     nFeatures = -1;
+    bCountFeaturesInGetNextFeature = FALSE;
 
     dfMinX = dfMinY = dfMaxX = dfMaxY = 0;
     bHasExtents = FALSE;
@@ -370,7 +371,7 @@ OGRFeatureDefn* OGRWFSLayer::BuildLayerDefnFromFeatureClass(GMLFeatureClass* poC
 /*                       MakeGetFeatureURL()                            */
 /************************************************************************/
 
-CPLString OGRWFSLayer::MakeGetFeatureURL(int nMaxFeatures, int bRequestHits)
+CPLString OGRWFSLayer::MakeGetFeatureURL(int nRequestMaxFeatures, int bRequestHits)
 {
     CPLString osURL(pszBaseURL);
     osURL = CPLURLAddKVP(osURL, "SERVICE", "WFS");
@@ -382,32 +383,19 @@ CPLString OGRWFSLayer::MakeGetFeatureURL(int nMaxFeatures, int bRequestHits)
 
     if (poDS->IsPagingAllowed() && !bRequestHits)
     {
-        if (nFeatures < 0)
-        {
-            if ((m_poAttrQuery == NULL || osWFSWhere.size() != 0) &&
-                poDS->GetFeatureSupportHits())
-            {
-                nFeatures = ExecuteGetFeatureResultTypeHits();
-            }
-        }
-        if (nFeatures >= poDS->GetPageSize())
-        {
-            osURL = CPLURLAddKVP(osURL, "STARTINDEX", CPLSPrintf("%d", nPagingStartIndex + 1));
-            nMaxFeatures = poDS->GetPageSize();
-            nFeatureCountRequested = nMaxFeatures;
-            bPagingActive = TRUE;
-        }
-        else
-        {
-            osURL = CPLURLAddKVP(osURL, "STARTINDEX", NULL);
-        }
+        osURL = CPLURLAddKVP(osURL, "STARTINDEX",
+            CPLSPrintf("%d", nPagingStartIndex +
+                                poDS->GetBaseStartIndex()));
+        nRequestMaxFeatures = poDS->GetPageSize();
+        nFeatureCountRequested = nRequestMaxFeatures;
+        bPagingActive = TRUE;
     }
 
-    if (nMaxFeatures)
+    if (nRequestMaxFeatures)
     {
         osURL = CPLURLAddKVP(osURL,
                              atoi(poDS->GetVersion()) >= 2 ? "COUNT" : "MAXFEATURES",
-                             CPLSPrintf("%d", nMaxFeatures));
+                             CPLSPrintf("%d", nRequestMaxFeatures));
     }
     if (pszNS && poDS->GetNeedNAMESPACE())
     {
@@ -684,10 +672,10 @@ int OGRWFSLayer::MustRetryIfNonCompliantServer(const char* pszServerAnswer)
 /*                         FetchGetFeature()                            */
 /************************************************************************/
 
-OGRDataSource* OGRWFSLayer::FetchGetFeature(int nMaxFeatures)
+OGRDataSource* OGRWFSLayer::FetchGetFeature(int nRequestMaxFeatures)
 {
 
-    CPLString osURL = MakeGetFeatureURL(nMaxFeatures, FALSE);
+    CPLString osURL = MakeGetFeatureURL(nRequestMaxFeatures, FALSE);
     CPLDebug("WFS", "%s", osURL.c_str());
 
     CPLHTTPResult* psResult = NULL;
@@ -730,14 +718,14 @@ OGRDataSource* OGRWFSLayer::FetchGetFeature(int nMaxFeatures)
         if (nRead != 0)
         {
             if (MustRetryIfNonCompliantServer(szBuffer))
-                return FetchGetFeature(nMaxFeatures);
+                return FetchGetFeature(nRequestMaxFeatures);
 
             if (strstr(szBuffer, "<ServiceExceptionReport") != NULL ||
                 strstr(szBuffer, "<ows:ExceptionReport") != NULL)
             {
                 if (poDS->IsOldDeegree(szBuffer))
                 {
-                    return FetchGetFeature(nMaxFeatures);
+                    return FetchGetFeature(nRequestMaxFeatures);
                 }
 
                 CPLError(CE_Failure, CPLE_AppDefined, "Error returned by server : %s",
@@ -842,7 +830,7 @@ OGRDataSource* OGRWFSLayer::FetchGetFeature(int nMaxFeatures)
     if (MustRetryIfNonCompliantServer((const char*)pabyData))
     {
         CPLHTTPDestroyResult(psResult);
-        return FetchGetFeature(nMaxFeatures);
+        return FetchGetFeature(nRequestMaxFeatures);
     }
 
     if (strstr((const char*)pabyData, "<ServiceExceptionReport") != NULL ||
@@ -851,7 +839,7 @@ OGRDataSource* OGRWFSLayer::FetchGetFeature(int nMaxFeatures)
         if (poDS->IsOldDeegree((const char*)pabyData))
         {
             CPLHTTPDestroyResult(psResult);
-            return FetchGetFeature(nMaxFeatures);
+            return FetchGetFeature(nRequestMaxFeatures);
         }
 
         CPLError(CE_Failure, CPLE_AppDefined, "Error returned by server : %s",
@@ -1131,6 +1119,8 @@ OGRFeature *OGRWFSLayer::GetNextFeature()
         if (poSrcFeature == NULL)
             return NULL;
         nFeatureRead ++;
+        if( bCountFeaturesInGetNextFeature )
+            nFeatures ++;
 
         OGRGeometry* poGeom = poSrcFeature->GetGeometryRef();
         if( m_poFilterGeom != NULL && poGeom != NULL &&
@@ -1181,7 +1171,8 @@ OGRFeature *OGRWFSLayer::GetNextFeature()
         /* and non-GML format !!! I guess 50% WFS servers must do it wrong anyway */
         /* GeoServer does currently axis inversion for non GML output, but */
         /* apparently this is not correct : http://jira.codehaus.org/browse/GEOS-3657 */
-        if (bAxisOrderAlreadyInverted &&
+        if (poGeom != NULL &&
+            bAxisOrderAlreadyInverted &&
             strcmp(poBaseDS->GetDriver()->GetName(), "GML") != 0)
         {
             poGeom->swapXY();
@@ -1462,6 +1453,21 @@ int OGRWFSLayer::ExecuteGetFeatureResultTypeHits()
 
     return nFeatures;
 }
+/************************************************************************/
+/*              CanRunGetFeatureCountAndGetExtentTogether()             */
+/************************************************************************/
+
+int OGRWFSLayer::CanRunGetFeatureCountAndGetExtentTogether()
+{
+    /* In some cases, we can evaluate the result of GetFeatureCount() */
+    /* and GetExtent() with the same data */
+    CPLString osRequestURL = MakeGetFeatureURL(0, FALSE);
+    return( !bHasExtents && nFeatures < 0 &&
+            osRequestURL.ifind("FILTER") == std::string::npos &&
+            osRequestURL.ifind("MAXFEATURES") == std::string::npos &&
+            osRequestURL.ifind("COUNT") == std::string::npos &&
+            !(GetLayerDefn()->IsGeometryIgnored()) );
+}
 
 /************************************************************************/
 /*                           GetFeatureCount()                          */
@@ -1498,7 +1504,17 @@ int OGRWFSLayer::GetFeatureCount( int bForce )
             return poBaseLayer->GetFeatureCount(bForce);
     }
 
-    nFeatures = OGRLayer::GetFeatureCount(bForce);
+    /* In some cases, we can evaluate the result of GetFeatureCount() */
+    /* and GetExtent() with the same data */
+    if( CanRunGetFeatureCountAndGetExtentTogether() )
+    {
+        OGREnvelope sDummy;
+        GetExtent(&sDummy);
+    }
+
+    if( nFeatures < 0 )
+        nFeatures = OGRLayer::GetFeatureCount(bForce);
+
     return nFeatures;
 }
 
@@ -1546,7 +1562,34 @@ OGRErr OGRWFSLayer::GetExtent(OGREnvelope *psExtent, int bForce)
     if (TestCapability(OLCFastGetExtent))
         return poBaseLayer->GetExtent(psExtent, bForce);
 
-    return OGRLayer::GetExtent(psExtent, bForce);
+    /* In some cases, we can evaluate the result of GetFeatureCount() */
+    /* and GetExtent() with the same data */
+    if( CanRunGetFeatureCountAndGetExtentTogether() )
+    {
+        bCountFeaturesInGetNextFeature = TRUE;
+        nFeatures = 0;
+    }
+
+    OGRErr eErr = OGRLayer::GetExtent(psExtent, bForce);
+
+    if( bCountFeaturesInGetNextFeature )
+    {
+        if( eErr == OGRERR_NONE )
+        {
+            dfMinX = psExtent->MinX;
+            dfMinY = psExtent->MinY;
+            dfMaxX = psExtent->MaxX;
+            dfMaxY = psExtent->MaxY;
+            bHasExtents = TRUE;
+        }
+        else
+        {
+            nFeatures = -1;
+        }
+        bCountFeaturesInGetNextFeature = FALSE;
+    }
+
+    return eErr;
 }
 
 /************************************************************************/
@@ -1838,6 +1881,7 @@ OGRErr OGRWFSLayer::CreateFeature( OGRFeature *poFeature )
     /* Invalidate layer */
     bReloadNeeded = TRUE;
     nFeatures = -1;
+    bHasExtents = FALSE;
 
     return OGRERR_NONE;
 }
@@ -2027,6 +2071,7 @@ OGRErr OGRWFSLayer::SetFeature( OGRFeature *poFeature )
     /* Invalidate layer */
     bReloadNeeded = TRUE;
     nFeatures = -1;
+    bHasExtents = FALSE;
 
     return OGRERR_NONE;
 }
@@ -2162,6 +2207,7 @@ OGRErr OGRWFSLayer::DeleteFromFilter( CPLString osOGCFilter )
     /* Invalidate layer */
     bReloadNeeded = TRUE;
     nFeatures = -1;
+    bHasExtents = FALSE;
 
     return OGRERR_NONE;
 }

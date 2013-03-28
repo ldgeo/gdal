@@ -156,6 +156,32 @@ public class gdal:public static int PushErrorHandler(String callbackName)
 public class gdal:public static int PushErrorHandler()
 
 /**
+ * Set a global error handler.
+ *
+ * This installs a global error handler.
+ * 
+ * Note; if a local handler is already installed with PushErrorHandler(), the global error
+ * handler will not be used until the last local handler is uninstalled with PopErrorHandler().
+  *
+ * @since Java bindings 1.10.0
+ *
+ * @param callbackName handler function name : "CPLQuietErrorHandler", "CPLDefaultErrorHandler", "CPLLoggingErrorHandler"
+ */
+public class gdal:public static int SetErrorHandler(String callbackName)
+
+/**
+ * Set a quiet global error handler.
+ *
+ * This installs a quiet global error handler.
+ * 
+ * Note; if a local handler is already installed with PushErrorHandler(), the global error
+ * handler will not be used until the last local handler is uninstalled with PopErrorHandler().
+  *
+ * @since Java bindings 1.10.0
+ */
+public class gdal:public static int SetErrorHandler()
+
+/**
  * Report an error.
  *
  * This function reports an error in a manner that can be hooked
@@ -1123,6 +1149,7 @@ public class gdal:public static Dataset AutoCreateWarpedVRT(Dataset src_ds)
  * Available request values:
  * <ul>
  * <li> "VERSION_NUM": Returns GDAL_VERSION_NUM formatted as a string.  ie. "1170"
+ *      Note: starting with GDAL 1.10, this string will be longer than 4 characters.
  * <li> "RELEASE_DATE": Returns GDAL_RELEASE_DATE formatted as a string.  
  * ie. "20020416".
  * <li> "RELEASE_NAME": Returns the GDAL_RELEASE_NAME. ie. "1.1.7"
@@ -7145,6 +7172,18 @@ public class Layer:public boolean TestCapability(String cap)
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7160,7 +7199,7 @@ public class Layer:public boolean TestCapability(String cap)
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Intersection( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7194,6 +7233,18 @@ public class Layer:public int Intersection( Layer pLayerMethod, Layer pLayerResu
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7209,7 +7260,7 @@ public class Layer:public int Intersection( Layer pLayerMethod, Layer pLayerResu
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Union( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7242,6 +7293,18 @@ public class Layer:public int Union( Layer pLayerMethod, Layer pLayerResult)
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7257,7 +7320,7 @@ public class Layer:public int Union( Layer pLayerMethod, Layer pLayerResult)
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int SymDifference( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7288,6 +7351,18 @@ public class Layer:public int SymDifference( Layer pLayerMethod, Layer pLayerRes
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7303,7 +7378,7 @@ public class Layer:public int SymDifference( Layer pLayerMethod, Layer pLayerRes
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Identity( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7337,6 +7412,18 @@ public class Layer:public int Identity( Layer pLayerMethod, Layer pLayerResult)
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7352,7 +7439,7 @@ public class Layer:public int Identity( Layer pLayerMethod, Layer pLayerResult)
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Update( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7378,6 +7465,18 @@ public class Layer:public int Update( Layer pLayerMethod, Layer pLayerResult)
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7393,7 +7492,7 @@ public class Layer:public int Update( Layer pLayerMethod, Layer pLayerResult)
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Clip( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -7419,6 +7518,18 @@ public class Layer:public int Clip( Layer pLayerMethod, Layer pLayerResult)
  * For best performance use the minimum amount of features in
  * the method layer and copy it into a memory layer.
  * <p>
+ * The recognized list of options is :
+ * <ul>
+ * <li>SKIP_FAILURES=YES/NO. Set it to YES to go on, even when a
+ *     feature could not be inserted.
+ * <li>PROMOTE_TO_MULTI=YES/NO. Set it to YES to convert Polygons
+ *     into MultiPolygons, or LineStrings to MultiLineStrings.
+ * <li>INPUT_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the input layer.
+ * <li>METHOD_PREFIX=string. Set a prefix for the field names that
+ *     will be created from the fields of the method layer.
+ * </ul>
+ * <p>
  * This method relies on GEOS support. Do not use unless the
  * GEOS support is compiled in.
  *
@@ -7434,7 +7545,7 @@ public class Layer:public int Clip( Layer pLayerMethod, Layer pLayerResult)
  *
  * @return 0 on success. Otherwise throws a RuntimeException (or an error code if DontUseExceptions() has been called).
  *
- * @since OGR 2.0
+ * @since OGR 1.10
  */
 public class Layer:public int Erase( Layer pLayerMethod, Layer pLayerResult, java.util.Vector options, ProgressCallback callback )
 
@@ -11662,7 +11773,7 @@ public class CoordinateTransformation
  * Caution: the coordinate transformation object returned can be in a non
  * working state if no coordinate transformation can be established between
  * src and dst, and calling other methods on it can result in the process
- * termination. If using GDAL 2.0 or above, it is recommanded to use the
+ * termination. If using GDAL 1.10 or above, it is recommanded to use the
  * <a href="#CreateCoordinateTransformation(org.gdal.osr.SpatialReference,%20org.gdal.osr.SpatialReference)">
  * CreateCoordinateTransformation(org.gdal.osr.SpatialReference, org.gdal.osr.SpatialReference)</a> method instead.
  * <p>
@@ -11688,7 +11799,7 @@ public class CoordinateTransformation:public CoordinateTransformation(SpatialRef
  * @param src source spatial reference system. 
  * @param dst target spatial reference system.
  * @return a new CoordinateTransformation object, or null in case of failure
- * @since GDAL 2.0
+ * @since GDAL 1.10
  */
 public class CoordinateTransformation:public static CoordinateTransformation CreateCoordinateTransformation(SpatialReference src, SpatialReference dst)
 
@@ -11817,7 +11928,7 @@ public class osr:public static String GetWellKnownGeogCSAsWKT(String definition)
  * @param src source spatial reference system. 
  * @param dst target spatial reference system.
  * @return a new CoordinateTransformation object, or null in case of failure
- * @since GDAL 2.0
+ * @since GDAL 1.10
  * @see <a href="CoordinateTransformation.html#CreateCoordinateTransformation(org.gdal.osr.SpatialReference,%20org.gdal.osr.SpatialReference)">
  * CoordinateTransformation.CreateCoordinateTransformation(org.gdal.osr.SpatialReference, org.gdal.osr.SpatialReference</a>
  */

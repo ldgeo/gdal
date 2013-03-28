@@ -143,6 +143,10 @@ void CPL_STDCALL GDALAllRegister()
     GDALRegister_PNG();
 #endif
 
+#ifdef FRMT_dds
+    GDALRegister_DDS();
+#endif
+    
 #ifdef FRMT_gta
     GDALRegister_GTA();
 #endif
@@ -357,6 +361,10 @@ void CPL_STDCALL GDALAllRegister()
     GDALRegister_R();
 #endif
 
+#ifdef FRMT_map
+    GDALRegister_MAP();
+#endif
+
 /* -------------------------------------------------------------------- */
 /*      Put raw formats at the end of the list. These drivers support   */
 /*      various ASCII-header labeled formats, so the driver could be    */
@@ -433,8 +441,8 @@ void CPL_STDCALL GDALAllRegister()
 #endif
 
 #ifdef FRMT_northwood
-	GDALRegister_NWT_GRD();
-	GDALRegister_NWT_GRC();
+    GDALRegister_NWT_GRD();
+    GDALRegister_NWT_GRC();
 #endif
 
 #ifdef FRMT_adrg

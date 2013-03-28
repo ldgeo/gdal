@@ -46,6 +46,8 @@ void VSIInstallCurlStreamingFileHandler(void)
 
 #include <curl/curl.h>
 
+void VSICurlSetOptions(CURL* hCurlHandle, const char* pszURL);
+
 #include <map>
 
 #define ENABLE_DEBUG        0
@@ -141,14 +143,10 @@ typedef struct
     int             bHastComputedFileSize;
     vsi_l_offset    fileSize;
     int             bIsDirectory;
+#ifdef notdef
+    unsigned int    nChecksumOfFirst1024Bytes;
+#endif
 } CachedFileProp;
-
-typedef struct
-{
-    unsigned long   pszURLHash;
-    size_t          nSize;
-    GByte          *pData;
-} CachedRegion;
 
 /************************************************************************/
 /*                       VSICurlStreamingFSHandler                      */
@@ -157,9 +155,6 @@ typedef struct
 class VSICurlStreamingFSHandler : public VSIFilesystemHandler
 {
     void           *hMutex;
-
-    CachedRegion  **papsRegions;
-    int             nRegions;
 
     std::map<CPLString, CachedFileProp*>   cacheFileSize;
 
@@ -174,13 +169,6 @@ public:
     void                AcquireMutex();
     void                ReleaseMutex();
 
-    CachedRegion*       GetRegion(const char*     pszURL);
-
-    void                AddRegion(const char*     pszURL,
-                                  vsi_l_offset    nFileOffsetStart,
-                                  size_t          nSize,
-                                  GByte          *pData);
-
     CachedFileProp*     GetCachedFileProp(const char*     pszURL);
 };
 
@@ -194,17 +182,24 @@ class VSICurlStreamingHandle : public VSIVirtualHandle
     VSICurlStreamingFSHandler* poFS;
 
     char*           pszURL;
-    unsigned long   pszURLHash;
 
+#ifdef notdef
+    unsigned int    nRecomputedChecksumOfFirst1024Bytes;
+#endif
     vsi_l_offset    curOffset;
     vsi_l_offset    fileSize;
     int             bHastComputedFileSize;
     ExistStatus     eExists;
     int             bIsDirectory;
+    
+    int             bCanTrustCandidateFileSize;
+    int             bHasCandidateFileSize;
+    vsi_l_offset    nCandidateFileSize;
 
-    vsi_l_offset    lastDownloadedOffset;
-    int             nBlocksToDownload;
     int             bEOF;
+
+    size_t          nCachedSize;
+    GByte          *pCachedData;
 
     CURL*           hCurlHandle;
 
@@ -229,6 +224,9 @@ class VSICurlStreamingHandle : public VSIVirtualHandle
     void                AcquireMutex();
     void                ReleaseMutex();
 
+    void                AddRegion( vsi_l_offset    nFileOffsetStart,
+                                   size_t          nSize,
+                                   GByte          *pData );
   public:
 
     VSICurlStreamingHandle(VSICurlStreamingFSHandler* poFS, const char* pszURL);
@@ -261,6 +259,9 @@ VSICurlStreamingHandle::VSICurlStreamingHandle(VSICurlStreamingFSHandler* poFS, 
     this->poFS = poFS;
     this->pszURL = CPLStrdup(pszURL);
 
+#ifdef notdef
+    nRecomputedChecksumOfFirst1024Bytes = 0;
+#endif
     curOffset = 0;
 
     poFS->AcquireMutex();
@@ -271,8 +272,13 @@ VSICurlStreamingHandle::VSICurlStreamingHandle(VSICurlStreamingFSHandler* poFS, 
     bIsDirectory = cachedFileProp->bIsDirectory;
     poFS->ReleaseMutex();
 
-    lastDownloadedOffset = -1;
-    nBlocksToDownload = 1;
+    bCanTrustCandidateFileSize = TRUE;
+    bHasCandidateFileSize = FALSE;
+    nCandidateFileSize = 0;
+
+    nCachedSize = 0;
+    pCachedData = NULL;
+
     bEOF = FALSE;
 
     hCurlHandle = NULL;
@@ -306,6 +312,8 @@ VSICurlStreamingHandle::~VSICurlStreamingHandle()
     if (hCurlHandle != NULL)
         curl_easy_cleanup(hCurlHandle);
 
+    CPLFree(pCachedData);
+
     CPLFree(pabyHeaderData);
 
     CPLDestroyMutex( hRingBufferMutex );
@@ -337,6 +345,19 @@ void VSICurlStreamingHandle::ReleaseMutex()
 
 int VSICurlStreamingHandle::Seek( vsi_l_offset nOffset, int nWhence )
 {
+    if( curOffset >= BKGND_BUFFER_SIZE )
+    {
+        if (ENABLE_DEBUG)
+            CPLDebug("VSICURL", "Invalidating cache and file size due to Seek() beyond caching zone");
+        CPLFree(pCachedData);
+        pCachedData = NULL;
+        nCachedSize = 0;
+        AcquireMutex();
+        bHastComputedFileSize = FALSE;
+        fileSize = 0;
+        ReleaseMutex();
+    }
+
     if (nWhence == SEEK_SET)
     {
         curOffset = nOffset;
@@ -352,66 +373,6 @@ int VSICurlStreamingHandle::Seek( vsi_l_offset nOffset, int nWhence )
     bEOF = FALSE;
     return 0;
 }
-
-/************************************************************************/
-/*                       VSICurlSetOptions()                            */
-/************************************************************************/
-
-static void VSICurlSetOptions(CURL* hCurlHandle, const char* pszURL)
-{
-    curl_easy_setopt(hCurlHandle, CURLOPT_URL, pszURL);
-    if (CSLTestBoolean(CPLGetConfigOption("CPL_CURL_VERBOSE", "NO")))
-        curl_easy_setopt(hCurlHandle, CURLOPT_VERBOSE, 1);
-
-    /* Set Proxy parameters */
-    const char* pszProxy = CPLGetConfigOption("GDAL_HTTP_PROXY", NULL);
-    if (pszProxy)
-        curl_easy_setopt(hCurlHandle,CURLOPT_PROXY,pszProxy);
-
-    const char* pszProxyUserPwd = CPLGetConfigOption("GDAL_HTTP_PROXYUSERPWD", NULL);
-    if (pszProxyUserPwd)
-        curl_easy_setopt(hCurlHandle,CURLOPT_PROXYUSERPWD,pszProxyUserPwd);
-
-    /* Enable following redirections.  Requires libcurl 7.10.1 at least */
-    curl_easy_setopt(hCurlHandle, CURLOPT_FOLLOWLOCATION, 1);
-    curl_easy_setopt(hCurlHandle, CURLOPT_MAXREDIRS, 10);
-
-/* 7.16 */
-#if LIBCURL_VERSION_NUM >= 0x071000
-    long option = CURLFTPMETHOD_SINGLECWD;
-    curl_easy_setopt(hCurlHandle, CURLOPT_FTP_FILEMETHOD, option);
-#endif
-
-/* 7.12.3 */
-#if LIBCURL_VERSION_NUM > 0x070C03
-    /* ftp://ftp2.cits.rncan.gc.ca/pub/cantopo/250k_tif/ doesn't like EPSV command */
-    curl_easy_setopt(hCurlHandle, CURLOPT_FTP_USE_EPSV, 0);
-#endif
-
-    /* NOSIGNAL should be set to true for timeout to work in multithread
-    environments on Unix, requires libcurl 7.10 or more recent.
-    (this force avoiding the use of sgnal handlers) */
-
-/* 7.10 */
-#if LIBCURL_VERSION_NUM >= 0x070A00
-    curl_easy_setopt(hCurlHandle, CURLOPT_NOSIGNAL, 1);
-#endif
-
-    curl_easy_setopt(hCurlHandle, CURLOPT_NOBODY, 0);
-    curl_easy_setopt(hCurlHandle, CURLOPT_HTTPGET, 1);
-    curl_easy_setopt(hCurlHandle, CURLOPT_HEADER, 0);
-
-/* 7.16.4 */
-#if LIBCURL_VERSION_NUM <= 0x071004
-    curl_easy_setopt(hCurlHandle, CURLOPT_FTPLISTONLY, 0);
-#elif LIBCURL_VERSION_NUM > 0x071004
-    curl_easy_setopt(hCurlHandle, CURLOPT_DIRLISTONLY, 0);
-#endif
-
-    curl_easy_setopt(hCurlHandle, CURLOPT_HEADERDATA, NULL);
-    curl_easy_setopt(hCurlHandle, CURLOPT_HEADERFUNCTION, NULL);
-}
-
 
 typedef struct
 {
@@ -622,6 +583,9 @@ vsi_l_offset VSICurlStreamingHandle::GetFileSize()
     poFS->AcquireMutex();
     CachedFileProp* cachedFileProp = poFS->GetCachedFileProp(pszURL);
     cachedFileProp->bHastComputedFileSize = TRUE;
+#ifdef notdef
+    cachedFileProp->nChecksumOfFirst1024Bytes = nRecomputedChecksumOfFirst1024Bytes;
+#endif
     cachedFileProp->fileSize = fileSize;
     cachedFileProp->eExists = eExists;
     cachedFileProp->bIsDirectory = bIsDirectory;
@@ -726,6 +690,17 @@ int VSICurlStreamingHandle::ReceivedBytes(GByte *buffer, size_t count, size_t nm
 
     if (ENABLE_DEBUG)
         CPLDebug("VSICURL", "Receiving %d bytes...", (int)nSize);
+
+    if( bHasCandidateFileSize && bCanTrustCandidateFileSize && !bHastComputedFileSize )
+    {
+        poFS->AcquireMutex();
+        CachedFileProp* cachedFileProp = poFS->GetCachedFileProp(pszURL);
+        cachedFileProp->fileSize = fileSize = nCandidateFileSize;
+        cachedFileProp->bHastComputedFileSize = bHastComputedFileSize = TRUE;
+        if (ENABLE_DEBUG)
+            CPLDebug("VSICURL", "File size = " CPL_FRMT_GUIB, fileSize);
+        poFS->ReleaseMutex();
+    }
 
     AcquireMutex();
     if (eExists == EXIST_UNKNOWN)
@@ -857,18 +832,31 @@ int VSICurlStreamingHandle::ReceivedBytesHeader(GByte *buffer, size_t count, siz
 
         if ( !(nHTTPCode == 301 || nHTTPCode == 302) && !bHastComputedFileSize)
         {
+            /* Caution: when gzip compression is enabled, the content-length is the compressed */
+            /* size, which we are not interested in, so we must not take it into account. */
+
             const char* pszContentLength = strstr((const char*)pabyHeaderData, "Content-Length: ");
             const char* pszEndOfLine = pszContentLength ? strchr(pszContentLength, '\n') : NULL;
-            if (pszEndOfLine != NULL)
+            if( bCanTrustCandidateFileSize && pszEndOfLine != NULL )
             {
-                poFS->AcquireMutex();
-                CachedFileProp* cachedFileProp = poFS->GetCachedFileProp(pszURL);
-                cachedFileProp->fileSize = fileSize = CPLScanUIntBig(pszContentLength + 16,
-                                                                     pszEndOfLine - (pszContentLength + 16));
-                cachedFileProp->bHastComputedFileSize = bHastComputedFileSize = TRUE;
+                const char* pszVal = pszContentLength + strlen("Content-Length: ");
+                bHasCandidateFileSize = TRUE;
+                nCandidateFileSize = CPLScanUIntBig(pszVal, pszEndOfLine - pszVal);
                 if (ENABLE_DEBUG)
-                    CPLDebug("VSICURL", "File size = " CPL_FRMT_GUIB, fileSize);
-                poFS->ReleaseMutex();
+                    CPLDebug("VSICURL", "Has found candidate file size = " CPL_FRMT_GUIB, nCandidateFileSize);
+            }
+
+            const char* pszContentEncoding = strstr((const char*)pabyHeaderData, "Content-Encoding: ");
+            pszEndOfLine = pszContentEncoding ? strchr(pszContentEncoding, '\n') : NULL;
+            if( bHasCandidateFileSize && pszEndOfLine != NULL )
+            {
+                const char* pszVal = pszContentEncoding + strlen("Content-Encoding: ");
+                if( strncmp(pszVal, "gzip", 4) == 0 )
+                {
+                    if (ENABLE_DEBUG)
+                        CPLDebug("VSICURL", "GZip compression enabled --> cannot trust candidate file size");
+                    bCanTrustCandidateFileSize = FALSE;
+                }
             }
         }
 
@@ -893,6 +881,18 @@ static int VSICurlStreamingHandleReceivedBytesHeader(void *buffer, size_t count,
 void VSICurlStreamingHandle::DownloadInThread()
 {
     VSICurlSetOptions(hCurlHandle, pszURL);
+
+    static int bHasCheckVersion = FALSE;
+    static int bSupportGZip = FALSE;
+    if (!bHasCheckVersion)
+    {
+        bSupportGZip = strstr(curl_version(), "zlib/") != NULL;
+        bHasCheckVersion = TRUE;
+    }
+    if (bSupportGZip && CSLTestBoolean(CPLGetConfigOption("CPL_CURL_GZIP", "YES")))
+    {
+        curl_easy_setopt(hCurlHandle, CURLOPT_ENCODING, "gzip");
+    }
 
     if (pabyHeaderData == NULL)
         pabyHeaderData = (GByte*) CPLMalloc(HEADER_SIZE + 1);
@@ -993,8 +993,6 @@ void VSICurlStreamingHandle::StopDownload()
         hCurlHandle = NULL;
     }
 
-    PutRingBufferInCache();
-
     oRingBuffer.Reset();
     bDownloadStopped = FALSE;
 }
@@ -1022,8 +1020,7 @@ void VSICurlStreamingHandle::PutRingBufferInCache()
         /* Signal to the producer that we have ingested some bytes */
         CPLCondSignal(hCondConsumer);
 
-        poFS->AddRegion(pszURL, nRingBufferFileOffset,
-                        nBufSize, pabyTmp);
+        AddRegion(nRingBufferFileOffset, nBufSize, pabyTmp);
         nRingBufferFileOffset += nBufSize;
         CPLFree(pabyTmp);
     }
@@ -1049,7 +1046,10 @@ size_t VSICurlStreamingHandle::Read( void *pBuffer, size_t nSize, size_t nMemb )
     ReleaseMutex();
 
     if (bHastComputedFileSizeLocal && curOffset >= fileSizeLocal)
+    {
+        CPLDebug("VSICURL", "Read attempt beyond end of file");
         bEOF = TRUE;
+    }
     if (bEOF)
         return 0;
 
@@ -1060,38 +1060,68 @@ size_t VSICurlStreamingHandle::Read( void *pBuffer, size_t nSize, size_t nMemb )
         CPLDebug("VSICURL", "Read [" CPL_FRMT_GUIB ", " CPL_FRMT_GUIB "[ in %s",
                  curOffset, curOffset + nBufferRequestSize, pszURL);
 
-    /* Can we use the cache ? */
-    poFS->AcquireMutex();
-    CachedRegion* psRegion = poFS->GetRegion(pszURL);
-    if( psRegion != NULL && curOffset < psRegion->nSize )
+#ifdef notdef
+    if( pCachedData != NULL && nCachedSize >= 1024 &&
+        nRecomputedChecksumOfFirst1024Bytes == 0 )
     {
-        size_t nSz = MIN(nRemaining, (size_t)(psRegion->nSize - curOffset));
+        for(size_t i = 0; i < 1024 / sizeof(int); i ++)
+        {
+            int nVal;
+            memcpy(&nVal, pCachedData + i * sizeof(int), sizeof(int));
+            nRecomputedChecksumOfFirst1024Bytes += nVal;
+        }
+
+        if( bHastComputedFileSizeLocal )
+        {
+            poFS->AcquireMutex();
+            CachedFileProp* cachedFileProp = poFS->GetCachedFileProp(pszURL);
+            if( cachedFileProp->nChecksumOfFirst1024Bytes == 0 )
+            {
+                cachedFileProp->nChecksumOfFirst1024Bytes = nRecomputedChecksumOfFirst1024Bytes;
+            }
+            else if( nRecomputedChecksumOfFirst1024Bytes != cachedFileProp->nChecksumOfFirst1024Bytes )
+            {
+                CPLDebug("VSICURL", "Invalidating previously cached file size. First bytes of file have changed!");
+                AcquireMutex();
+                bHastComputedFileSize = FALSE;
+                cachedFileProp->bHastComputedFileSize = FALSE;
+                cachedFileProp->nChecksumOfFirst1024Bytes = 0;
+                ReleaseMutex();
+            }
+            poFS->ReleaseMutex();
+        }
+    }
+#endif
+
+    /* Can we use the cache ? */
+    if( pCachedData != NULL && curOffset < nCachedSize )
+    {
+        size_t nSz = MIN(nRemaining, (size_t)(nCachedSize - curOffset));
         if (ENABLE_DEBUG)
             CPLDebug("VSICURL", "Using cache for [%d, %d[ in %s",
                      (int)curOffset, (int)(curOffset + nSz), pszURL);
-        memcpy(pabyBuffer, psRegion->pData + curOffset, nSz);
+        memcpy(pabyBuffer, pCachedData + curOffset, nSz);
         pabyBuffer += nSz;
         curOffset += nSz;
         nRemaining -= nSz;
     }
 
     /* Is the request partially covered by the cache and going beyond file size ? */
-    if ( psRegion != NULL && bHastComputedFileSizeLocal &&
-         curOffset <= psRegion->nSize &&
+    if ( pCachedData != NULL && bHastComputedFileSizeLocal &&
+         curOffset <= nCachedSize &&
          curOffset + nRemaining > fileSizeLocal &&
-         fileSize == psRegion->nSize )
+         fileSize == nCachedSize )
     {
-        size_t nSz = (size_t) (psRegion->nSize - curOffset);
+        size_t nSz = (size_t) (nCachedSize - curOffset);
         if (ENABLE_DEBUG && nSz != 0)
             CPLDebug("VSICURL", "Using cache for [%d, %d[ in %s",
                     (int)curOffset, (int)(curOffset + nSz), pszURL);
-        memcpy(pabyBuffer, psRegion->pData + curOffset, nSz);
+        memcpy(pabyBuffer, pCachedData + curOffset, nSz);
         pabyBuffer += nSz;
         curOffset += nSz;
         nRemaining -= nSz;
         bEOF = TRUE;
     }
-    poFS->ReleaseMutex();
 
     /* Has a Seek() being done since the last Read() ? */
     if (!bEOF && nRemaining > 0 && curOffset != nRingBufferFileOffset)
@@ -1123,7 +1153,7 @@ size_t VSICurlStreamingHandle::Read( void *pBuffer, size_t nSize, size_t nMemb )
             ReleaseMutex();
 
             if (nBytesToRead)
-                poFS->AddRegion(pszURL, nRingBufferFileOffset, (size_t)nBytesToRead, pabyTmp);
+                AddRegion(nRingBufferFileOffset, (size_t)nBytesToRead, pabyTmp);
 
             nBytesToSkip -= nBytesToRead;
             nRingBufferFileOffset += nBytesToRead;
@@ -1173,7 +1203,7 @@ size_t VSICurlStreamingHandle::Read( void *pBuffer, size_t nSize, size_t nMemb )
         ReleaseMutex();
 
         if (nToRead)
-            poFS->AddRegion(pszURL, curOffset, nToRead, pabyBuffer);
+            AddRegion(curOffset, nToRead, pabyBuffer);
 
         nRemaining -= nToRead;
         pabyBuffer += nToRead;
@@ -1202,9 +1232,35 @@ size_t VSICurlStreamingHandle::Read( void *pBuffer, size_t nSize, size_t nMemb )
     size_t nRet = (nBufferRequestSize - nRemaining) / nSize;
     if (nRet < nMemb)
         bEOF = TRUE;
+
     return nRet;
 }
 
+/************************************************************************/
+/*                          AddRegion()                                 */
+/************************************************************************/
+
+void  VSICurlStreamingHandle::AddRegion( vsi_l_offset    nFileOffsetStart,
+                                         size_t          nSize,
+                                         GByte          *pData )
+{
+    if (nFileOffsetStart >= BKGND_BUFFER_SIZE)
+        return;
+
+        if (pCachedData == NULL)
+            pCachedData = (GByte*) CPLMalloc(BKGND_BUFFER_SIZE);
+
+    if (nFileOffsetStart <= nCachedSize &&
+        nFileOffsetStart + nSize > nCachedSize)
+    {
+        size_t nSz = MIN(nSize, (size_t) (BKGND_BUFFER_SIZE - nFileOffsetStart));
+        if (ENABLE_DEBUG)
+            CPLDebug("VSICURL", "Writing [%d, %d[ in cache for %s",
+                     (int)nFileOffsetStart, (int)(nFileOffsetStart + nSz), pszURL);
+        memcpy(pCachedData + nFileOffsetStart, pData, nSz);
+        nCachedSize = (size_t) (nFileOffsetStart + nSz);
+    }
+}
 /************************************************************************/
 /*                               Write()                                */
 /************************************************************************/
@@ -1251,8 +1307,6 @@ VSICurlStreamingFSHandler::VSICurlStreamingFSHandler()
 {
     hMutex = CPLCreateMutex();
     CPLReleaseMutex(hMutex);
-    papsRegions = NULL;
-    nRegions = 0;
 }
 
 /************************************************************************/
@@ -1261,14 +1315,6 @@ VSICurlStreamingFSHandler::VSICurlStreamingFSHandler()
 
 VSICurlStreamingFSHandler::~VSICurlStreamingFSHandler()
 {
-    int i;
-    for(i=0;i<nRegions;i++)
-    {
-        CPLFree(papsRegions[i]->pData);
-        CPLFree(papsRegions[i]);
-    }
-    CPLFree(papsRegions);
-
     std::map<CPLString, CachedFileProp*>::const_iterator iterCacheFileSize;
 
     for( iterCacheFileSize = cacheFileSize.begin();
@@ -1283,7 +1329,7 @@ VSICurlStreamingFSHandler::~VSICurlStreamingFSHandler()
 }
 
 /************************************************************************/
-/*                          GetRegion()                                 */
+/*                         AcquireMutex()                               */
 /************************************************************************/
 
 void VSICurlStreamingFSHandler::AcquireMutex()
@@ -1292,7 +1338,7 @@ void VSICurlStreamingFSHandler::AcquireMutex()
 }
 
 /************************************************************************/
-/*                          GetRegion()                                 */
+/*                         ReleaseMutex()                               */
 /************************************************************************/
 
 void VSICurlStreamingFSHandler::ReleaseMutex()
@@ -1301,91 +1347,10 @@ void VSICurlStreamingFSHandler::ReleaseMutex()
 }
 
 /************************************************************************/
-/*                          GetRegion()                                 */
-/************************************************************************/
-
-/* Should be called undef the FS Lock */
-
-CachedRegion* VSICurlStreamingFSHandler::GetRegion(const char* pszURL)
-{
-    unsigned long   pszURLHash = CPLHashSetHashStr(pszURL);
-
-    int i;
-    for(i=0;i<nRegions;i++)
-    {
-        CachedRegion* psRegion = papsRegions[i];
-        if (psRegion->pszURLHash == pszURLHash)
-        {
-            memmove(papsRegions + 1, papsRegions, i * sizeof(CachedRegion*));
-            papsRegions[0] = psRegion;
-            return psRegion;
-        }
-    }
-    return NULL;
-}
-
-/************************************************************************/
-/*                          AddRegion()                                 */
-/************************************************************************/
-
-void  VSICurlStreamingFSHandler::AddRegion( const char* pszURL,
-                                            vsi_l_offset    nFileOffsetStart,
-                                            size_t          nSize,
-                                            GByte          *pData )
-{
-    if (nFileOffsetStart >= BKGND_BUFFER_SIZE)
-        return;
-
-    AcquireMutex();
-
-    unsigned long   pszURLHash = CPLHashSetHashStr(pszURL);
-
-    CachedRegion* psRegion = GetRegion(pszURL);
-    if (psRegion == NULL)
-    {
-        if (nRegions == N_MAX_REGIONS)
-        {
-            psRegion = papsRegions[N_MAX_REGIONS-1];
-            memmove(papsRegions + 1, papsRegions,
-                    (N_MAX_REGIONS-1) * sizeof(CachedRegion*));
-            papsRegions[0] = psRegion;
-        }
-        else
-        {
-            papsRegions = (CachedRegion**)
-                CPLRealloc(papsRegions, (nRegions + 1) * sizeof(CachedRegion*));
-            if (nRegions)
-                memmove(papsRegions + 1, papsRegions, nRegions * sizeof(CachedRegion*));
-            nRegions ++;
-            papsRegions[0] = psRegion =
-                (CachedRegion*) CPLCalloc(1, sizeof(CachedRegion));
-        }
-
-        psRegion->pszURLHash = pszURLHash;
-        psRegion->nSize = 0;
-        if (psRegion->pData == NULL)
-            psRegion->pData = (GByte*) CPLMalloc(BKGND_BUFFER_SIZE);
-    }
-
-    if (nFileOffsetStart <= psRegion->nSize &&
-        nFileOffsetStart + nSize > psRegion->nSize)
-    {
-        size_t nSz = MIN(nSize, (size_t) (BKGND_BUFFER_SIZE - nFileOffsetStart));
-        if (ENABLE_DEBUG)
-            CPLDebug("VSICURL", "Writing [%d, %d[ in cache for %s",
-                     (int)nFileOffsetStart, (int)(nFileOffsetStart + nSz), pszURL);
-        memcpy(psRegion->pData + nFileOffsetStart, pData, nSz);
-        psRegion->nSize = (size_t) (nFileOffsetStart + nSz);
-    }
-
-    ReleaseMutex();
-}
-
-/************************************************************************/
 /*                         GetCachedFileProp()                          */
 /************************************************************************/
 
-/* Should be called undef the FS Lock */
+/* Should be called under the FS Lock */
 
 CachedFileProp*  VSICurlStreamingFSHandler::GetCachedFileProp(const char* pszURL)
 {
@@ -1397,6 +1362,9 @@ CachedFileProp*  VSICurlStreamingFSHandler::GetCachedFileProp(const char* pszURL
         cachedFileProp->bHastComputedFileSize = FALSE;
         cachedFileProp->fileSize = 0;
         cachedFileProp->bIsDirectory = FALSE;
+#ifdef notdef
+        cachedFileProp->nChecksumOfFirst1024Bytes = 0;
+#endif
         cacheFileSize[pszURL] = cachedFileProp;
     }
 
@@ -1426,7 +1394,11 @@ VSIVirtualHandle* VSICurlStreamingFSHandler::Open( const char *pszFilename,
         delete poHandle;
         poHandle = NULL;
     }
-    return poHandle;
+
+    if( CSLTestBoolean( CPLGetConfigOption( "VSI_CACHE", "FALSE" ) ) )
+        return VSICreateCachedFile( poHandle );
+    else
+        return poHandle;
 }
 
 /************************************************************************/
@@ -1472,15 +1444,19 @@ int VSICurlStreamingFSHandler::Stat( const char *pszFilename,
  * /vsicurl_streaming/ftp://path/to/remote/ressource where path/to/remote/ressource is the
  * URL of a remote ressource.
  *
- * The GDAL_HTTP_PROXY and GDAL_HTTP_PROXYUSERPWD configuration options can be
- * used to define a proxy server. The syntax to use is the one of Curl CURLOPT_PROXY
- * and CURLOPT_PROXYUSERPWD options.
+ * The GDAL_HTTP_PROXY, GDAL_HTTP_PROXYUSERPWD and GDAL_PROXY_AUTH configuration options can be
+ * used to define a proxy server. The syntax to use is the one of Curl CURLOPT_PROXY,
+ * CURLOPT_PROXYUSERPWD and CURLOPT_PROXYAUTH options.
+ *
+ * The file can be cached in RAM by setting the configuration option
+ * VSI_CACHE to TRUE. The cache size defaults to 25 MB, but can be modified by setting
+ * the configuration option VSI_CACHE_SIZE (in bytes).
  *
  * VSIStatL() will return the size in st_size member and file
  * nature- file or directory - in st_mode member (the later only reliable with FTP
  * resources for now).
  *
- * @since GDAL 2.0
+ * @since GDAL 1.10
  */
 void VSIInstallCurlStreamingFileHandler(void)
 {

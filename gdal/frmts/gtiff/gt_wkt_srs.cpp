@@ -54,6 +54,12 @@ CPL_CVSID("$Id$")
 
 
 CPL_C_START
+void CPL_DLL LibgeotiffOneTimeInit();
+void    LibgeotiffOneTimeCleanupMutex();
+
+// replicated from gdal_csv.h. 
+const char * GDALDefaultCSVFilename( const char *pszBasename );
+
 #ifndef CPL_SERV_H_INTERNAL
 /* Make VSIL_STRICT_ENFORCE active in DEBUG builds */
 #ifdef DEBUG
@@ -133,6 +139,40 @@ static const char *papszDatumEquiv[] =
 #ifndef CT_CylindricalEqualArea
 # define CT_CylindricalEqualArea 28
 #endif
+
+/************************************************************************/
+/*                       LibgeotiffOneTimeInit()                        */
+/************************************************************************/
+
+static void* hMutex = NULL;
+
+void LibgeotiffOneTimeInit() 
+{
+    static int bOneTimeInitDone = FALSE;
+    CPLMutexHolder oHolder( &hMutex);
+
+    if (bOneTimeInitDone)
+        return;
+
+    bOneTimeInitDone = TRUE;
+
+    // If linking with an external libgeotiff we hope this will call the
+    // SetCSVFilenameHook() in libgeotiff, not the one in gdal/port!
+    SetCSVFilenameHook( GDALDefaultCSVFilename );
+}
+
+/************************************************************************/
+/*                   LibgeotiffOneTimeCleanupMutex()                    */
+/************************************************************************/
+
+void LibgeotiffOneTimeCleanupMutex() 
+{
+    if( hMutex != NULL )
+    {
+        CPLDestroyMutex(hMutex);
+        hMutex = NULL;
+    }
+}
 
 /************************************************************************/
 /*                       GTIFToCPLRecyleString()                        */
@@ -273,6 +313,11 @@ char *GTIFGetOGISDefn( GTIF *hGTIF, GTIFDefn * psDefn )
 
 {
     OGRSpatialReference	oSRS;
+
+/* -------------------------------------------------------------------- */
+/*      Make sure we have hooked CSVFilename().                         */
+/* -------------------------------------------------------------------- */
+    LibgeotiffOneTimeInit();
 
 /* -------------------------------------------------------------------- */
 /*  Handle non-standard coordinate systems where GTModelTypeGeoKey      */
@@ -890,6 +935,16 @@ char *GTIFGetOGISDefn( GTIF *hGTIF, GTIFDefn * psDefn )
             verticalCSType = verticalDatum + 600;
         }
 
+/* -------------------------------------------------------------------- */
+/*      This addresses another case where the EGM96 Vertical Datum code */
+/*      is mis-used as a Vertical CS code (#4922)                       */
+/* -------------------------------------------------------------------- */
+        if( verticalCSType == 5171 )
+        {
+            verticalDatum = 5171;
+            verticalCSType = 5773;
+        }
+ 
 /* -------------------------------------------------------------------- */
 /*      Somewhat similarly, codes 5001 to 5033 were treated as          */
 /*      vertical coordinate systems based on ellipsoidal heights.       */
@@ -2337,6 +2392,11 @@ CPLErr GTIFWktFromMemBuf( int nSize, unsigned char *pabyBuffer,
              (long) CPLGetPID() );
 
 /* -------------------------------------------------------------------- */
+/*      Make sure we have hooked CSVFilename().                         */
+/* -------------------------------------------------------------------- */
+    LibgeotiffOneTimeInit();
+
+/* -------------------------------------------------------------------- */
 /*      Create a memory file from the buffer.                           */
 /* -------------------------------------------------------------------- */
     VSILFILE *fp = VSIFileFromMemBuffer( szFilename, pabyBuffer, nSize, FALSE );
@@ -2479,6 +2539,11 @@ CPLErr GTIFMemBufFromWkt( const char *pszWKT, const double *padfGeoTransform,
 
     sprintf( szFilename, "/vsimem/wkt_from_mem_buf_%ld.tif", 
              (long) CPLGetPID() );
+
+/* -------------------------------------------------------------------- */
+/*      Make sure we have hooked CSVFilename().                         */
+/* -------------------------------------------------------------------- */
+    LibgeotiffOneTimeInit();
 
 /* -------------------------------------------------------------------- */
 /*      Initialize access to the memory geotiff structure.              */

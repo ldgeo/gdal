@@ -11,7 +11,7 @@ LIBTOOL	=	@LIBTOOL@
 ifeq ($(HAVE_LIBTOOL),yes)
 LIBTOOL_COMPILE_CC =	$(LIBTOOL) --mode=compile --tag=CC
 LIBTOOL_COMPILE_CXX =	$(LIBTOOL) --mode=compile --tag=CXX
-LIBTOOL_LINK	=	$(LIBTOOL) --mode=link    --tag=LD
+LIBTOOL_LINK	=	$(LIBTOOL) --mode=link
 LIBTOOL_INSTALL	=	$(LIBTOOL) --mode=install 
 LIBTOOL_FINISH	=	$(LIBTOOL) --mode=finish --silent
 LIBTOOL_CLEAN	=	$(LIBTOOL) --mode=clean
@@ -33,7 +33,7 @@ INSTALL_DIR	= 	$(GDAL_ROOT)/install-sh -d
 # SDE_LIB needs to be first because it embeds zlib.  We need to use its symbols instead of -lz's
 
 LIBS	=	$(SDE_LIB) @LIBS@ $(KAK_LIBS) $(DWG_LIBS) $(CURL_LIB) \
-		$(MRSID_LIBS) $(MRSID_LIDAR_LIBS) $(INGRES_LIB) \
+		$(MRSID_LIBS) $(MRSID_LIDAR_LIBS) $(ECW_LIBS) $(INGRES_LIB) \
 		$(PCIDSK_LIB) $(RASDAMAN_LIB) $(CHARLS_LIB) \
 		$(OPENCL_LIB) $(JVM_LIB) $(LIBICONV) $(FGDB_LIB) $(LIBXML2_LIB)
 
@@ -158,6 +158,7 @@ endif
 # SQLite 
 #
 SQLITE_INC = @SQLITE_INC@
+SQLITE_HAS_COLUMN_METADATA = @SQLITE_HAS_COLUMN_METADATA@
 HAVE_SQLITE = @HAVE_SQLITE@
 HAVE_SPATIALITE = @HAVE_SPATIALITE@
 SPATIALITE_INC = @SPATIALITE_INC@
@@ -186,7 +187,6 @@ JASPER_FLAGS	= @JASPER_FLAGS@
 # JPEG-2000 Support via OpenJPEG library.
 #
 HAVE_OPENJPEG   = @HAVE_OPENJPEG@
-OPENJPEG_TRUNK    = @OPENJPEG_TRUNK@
 
 #
 # MrSID support via LizardTech's DSDK
@@ -201,6 +201,13 @@ MRSID_LIBS	= @MRSID_LIBS@
 #
 MRSID_LIDAR_INCLUDE	= @MRSID_LIDAR_INCLUDE@
 MRSID_LIDAR_LIBS	= @MRSID_LIDAR_LIBS@
+
+# 
+# ECW Related
+# 
+ECW_FLAGS	= @ECW_FLAGS@
+ECW_INCLUDE 	= @ECW_INCLUDE@
+ECW_LIBS	= @ECW_LIBS@
 
 # Xerces C++ XML Parser for GML and ILI
 #
@@ -262,12 +269,6 @@ FGDB_INC = @FGDB_INC@
 HAVE_ARCOBJECTS = @ARCOBJECTS_ENABLED@
 ARCOBJECTS_LIB	= @ARCOBJECTS_LIB@
 ARCOBJECTS_INC = @ARCOBJECTS_INC@
-
-
-# 
-# VFK
-#
-HAVE_VFK = @HAVE_VFK@
 
 #
 # Curl
@@ -357,6 +358,7 @@ OGDI_INCLUDE	=	@OGDI_INCLUDE@
 PNG_SETTING     =	@PNG_SETTING@
 JPEG_SETTING	=	@JPEG_SETTING@
 JPEG12_ENABLED =	@JPEG12_ENABLED@
+TIFF_JPEG12_ENABLED =    @TIFF_JPEG12_ENABLED@
 TIFF_SETTING	=	@TIFF_SETTING@
 TIFF_OPTS	=	@TIFF_OPTS@
 RENAME_INTERNAL_LIBTIFF_SYMBOLS = @RENAME_INTERNAL_LIBTIFF_SYMBOLS@
@@ -376,6 +378,11 @@ LIBZ_SETTING	=	@LIBZ_SETTING@
 LIBLZMA_SETTING	=	@LIBLZMA_SETTING@
 
 #
+# DDS via Crunch Support.
+#
+CRUNCHDIR = @CRUNCHDIR@
+
+#
 # Rasdaman stuff
 #
 RASDAMAN_ENABLED  =       @RASDAMAN_ENABLED@
@@ -390,6 +397,7 @@ HAVE_POPPLER = @HAVE_POPPLER@
 POPPLER_HAS_OPTCONTENT = @POPPLER_HAS_OPTCONTENT@
 POPPLER_BASE_STREAM_HAS_TWO_ARGS = @POPPLER_BASE_STREAM_HAS_TWO_ARGS@
 POPPLER_0_20_OR_LATER = @POPPLER_0_20_OR_LATER@
+POPPLER_0_23_OR_LATER = @POPPLER_0_23_OR_LATER@
 POPPLER_INC = @POPPLER_INC@
 
 #
@@ -452,12 +460,12 @@ GDAL_FORMATS = 	gxf gtiff hfa aigrid aaigrid ceos ceos2 iso8211 xpm \
 		nitf bmp pcidsk airsar rs2 ilwis rmf leveller sgi srtmhgt \
 		idrisi gsg ingr ers jaxapalsar dimap gff cosar pds adrg \
 		coasp tsx terragen blx msgn til r northwood saga xyz hf2 \
-		kmlsuperoverlay ozi ctg e00grid zmap ngsgeoid pdf iris \
+		kmlsuperoverlay ctg e00grid zmap ngsgeoid iris map\
 		@OPT_GDAL_FORMATS@
 
 
 ifneq ($(LIBZ_SETTING),no)
-GDAL_FORMATS := $(GDAL_FORMATS) rik
+GDAL_FORMATS := $(GDAL_FORMATS) rik ozi pdf
 endif
 
 ifeq ($(OGR_ENABLED),yes)

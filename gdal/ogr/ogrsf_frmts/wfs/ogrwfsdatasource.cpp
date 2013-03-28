@@ -39,6 +39,8 @@
 
 CPL_CVSID("$Id$");
 
+#define DEFAULT_BASE_START_INDEX     0
+#define DEFAULT_PAGE_SIZE            100
 
 /************************************************************************/
 /*                            WFSFindNode()                             */
@@ -143,12 +145,23 @@ OGRWFSDataSource::OGRWFSDataSource()
     papszHttpOptions = NULL;
 
     bPagingAllowed = CSLTestBoolean(CPLGetConfigOption("OGR_WFS_PAGING_ALLOWED", "OFF"));
-    nPageSize = 0;
+    nPageSize = DEFAULT_PAGE_SIZE;
+    nBaseStartIndex = DEFAULT_BASE_START_INDEX;
     if (bPagingAllowed)
     {
-        nPageSize = atoi(CPLGetConfigOption("OGR_WFS_PAGE_SIZE", "100"));
-        if (nPageSize <= 0)
-            nPageSize = 100;
+        const char* pszOption;
+
+        pszOption = CPLGetConfigOption("OGR_WFS_PAGE_SIZE", NULL);
+        if( pszOption != NULL )
+        {
+            nPageSize = atoi(pszOption);
+            if (nPageSize <= 0)
+                nPageSize = DEFAULT_PAGE_SIZE;
+        }
+
+        pszOption = CPLGetConfigOption("OGR_WFS_BASE_START_INDEX", NULL);
+        if( pszOption != NULL )
+            nBaseStartIndex = atoi(pszOption);
     }
 
     bIsGEOSERVER = FALSE;
@@ -668,6 +681,7 @@ CPLHTTPResult* OGRWFSDataSource::SendGetCapabilities(const char* pszBaseURL,
                                                      CPLString& osTypeName)
 {
     CPLString osURL(pszBaseURL);
+
     osURL = CPLURLAddKVP(osURL, "SERVICE", "WFS");
     osURL = CPLURLAddKVP(osURL, "REQUEST", "GetCapabilities");
     osTypeName = CPLURLGetValue(osURL, "TYPENAME");
@@ -677,14 +691,11 @@ CPLHTTPResult* OGRWFSDataSource::SendGetCapabilities(const char* pszBaseURL,
     osURL = CPLURLAddKVP(osURL, "MAXFEATURES", NULL);
     osURL = CPLURLAddKVP(osURL, "OUTPUTFORMAT", NULL);
 
-    /* Don't accept WFS 2.0.0 for now, unless explicitely specified */
-    if (CPLURLGetValue(osURL, "ACCEPTVERSIONS").size() == 0 &&
-        CPLURLGetValue(osURL, "VERSION").size() == 0)
-        osURL = CPLURLAddKVP(osURL, "ACCEPTVERSIONS", "1.1.0,1.0.0");
+    CPLHTTPResult* psResult;
 
     CPLDebug("WFS", "%s", osURL.c_str());
 
-    CPLHTTPResult* psResult = HTTPFetch( osURL, NULL);
+    psResult = HTTPFetch( osURL, NULL);
     if (psResult == NULL)
     {
         return NULL;
@@ -693,7 +704,9 @@ CPLHTTPResult* OGRWFSDataSource::SendGetCapabilities(const char* pszBaseURL,
     if (strstr((const char*)psResult->pabyData,
                                     "<ServiceExceptionReport") != NULL ||
         strstr((const char*)psResult->pabyData,
-                                    "<ows:ExceptionReport") != NULL)
+                                    "<ows:ExceptionReport") != NULL ||
+        strstr((const char*)psResult->pabyData,
+                                    "<ExceptionReport") != NULL)
     {
         CPLError(CE_Failure, CPLE_AppDefined, "Error returned by server : %s",
                 psResult->pabyData);
@@ -832,8 +845,12 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
         {
             nPageSize = atoi(pszParm);
             if (nPageSize <= 0)
-                nPageSize = 100;
+                nPageSize = DEFAULT_PAGE_SIZE;
         }
+
+        pszParm = CPLGetXMLValue( psRoot, "BaseStartIndex", NULL );
+        if( pszParm )
+            nBaseStartIndex = atoi(pszParm);
 
         osTypeName = CPLURLGetValue(pszBaseURL, "TYPENAME");
 
@@ -933,6 +950,8 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
         osBaseURL = pszBaseURL;
     }
 
+    pszBaseURL = NULL;
+
     if (osVersion.size() == 0)
         osVersion = CPLGetXMLValue(psWFSCapabilities, "version", "1.0.0");
     if (strcmp(osVersion.c_str(), "1.0.0") == 0)
@@ -946,6 +965,23 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
         else
             bGetFeatureSupportHits = DetectIfGetFeatureSupportHits(psWFSCapabilities);
         bRequiresEnvelopeSpatialFilter = DetectRequiresEnvelopeSpatialFilter(psWFSCapabilities);
+    }
+
+    if ( atoi(osVersion) >= 2 )
+    {
+        CPLString osMaxFeatures = CPLURLGetValue(osBaseURL, "COUNT" );
+        /* Ok, people are used to MAXFEATURES, so be nice to recognize it if it is used for WFS 2.0 ... */
+        if (osMaxFeatures.size() == 0 )
+        {
+            osMaxFeatures = CPLURLGetValue(osBaseURL, "MAXFEATURES");
+            if( osMaxFeatures.size() != 0 &&
+                CSLTestBoolean(CPLGetConfigOption("OGR_WFS_FIX_MAXFEATURES", "YES")) )
+            {
+                CPLDebug("WFS", "MAXFEATURES wrongly used for WFS 2.0. Using COUNT instead");
+                osBaseURL = CPLURLAddKVP(osBaseURL, "MAXFEATURES", NULL);
+                osBaseURL = CPLURLAddKVP(osBaseURL, "COUNT", osMaxFeatures);
+            }
+        }
     }
 
     DetectTransactionSupport(psWFSCapabilities);
@@ -1142,7 +1178,7 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
                 int bAxisOrderAlreadyInverted = FALSE;
 
                 /* If a SRSNAME parameter has been encoded in the URL, use it as the SRS */
-                CPLString osSRSName = CPLURLGetValue(pszBaseURL, "SRSNAME");
+                CPLString osSRSName = CPLURLGetValue(osBaseURL, "SRSNAME");
                 if (osSRSName.size() != 0)
                 {
                     pszDefaultSRS = osSRSName.c_str();
@@ -1162,9 +1198,11 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
                             OGR_SRSNode *poGEOGCS =
                                             poSRS->GetAttrNode( "GEOGCS" );
                             if( poGEOGCS != NULL )
-                            {
                                 poGEOGCS->StripNodes( "AXIS" );
-                            }
+
+                            OGR_SRSNode *poPROJCS = poSRS->GetAttrNode( "PROJCS" );
+                            if (poPROJCS != NULL && poSRS->EPSGTreatsAsNorthingEasting())
+                                poPROJCS->StripNodes( "AXIS" );
                         }
                     }
                 }
@@ -1242,7 +1280,7 @@ int OGRWFSDataSource::Open( const char * pszFilename, int bUpdateIn)
 
                 OGRWFSLayer* poLayer = new OGRWFSLayer(
                             this, poSRS, bAxisOrderAlreadyInverted,
-                            pszBaseURL, pszName, pszNS, pszNSVal);
+                            osBaseURL, pszName, pszNS, pszNSVal);
                 if (osOutputFormat.size())
                     poLayer->SetRequiredOutputFormat(osOutputFormat);
 
@@ -1815,7 +1853,7 @@ OGRLayer * OGRWFSDataSource::ExecuteSQL( const char *pszSQLCommand,
 /* -------------------------------------------------------------------- */
 /*      Use generic implementation for OGRSQL dialect.                  */
 /* -------------------------------------------------------------------- */
-    if( pszDialect != NULL && EQUAL(pszDialect,"OGRSQL") )
+    if( pszDialect != NULL && (EQUAL(pszDialect,"OGRSQL") || EQUAL(pszDialect, "SQLITE")) )
     {
         OGRLayer* poResLayer = OGRDataSource::ExecuteSQL( pszSQLCommand,
                                                           poSpatialFilter,

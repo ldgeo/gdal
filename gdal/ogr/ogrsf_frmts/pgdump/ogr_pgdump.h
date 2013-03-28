@@ -59,16 +59,19 @@ class OGRPGDumpLayer : public OGRLayer
     int                 bUseCopy;
     int                 bWriteAsHex;
     int                 bCopyActive;
+    int                 bFIDColumnInCopyFields;
     int                 bCreateTable;
-    
+
+    char              **papszOverrideColumnTypes;
+
     void                AppendFieldValue(CPLString& osCommand,
                                        OGRFeature* poFeature, int i);
     char*               GByteArrayToBYTEA( const GByte* pabyData, int nLen);
     char*               GeometryToHex( OGRGeometry * poGeometry, int nSRSId );
     
-    OGRErr              StartCopy();
-    CPLString           BuildCopyFields();
-    
+    OGRErr              StartCopy(int bSetFID);
+    CPLString           BuildCopyFields(int bSetFID);
+
   public:
                         OGRPGDumpLayer(OGRPGDumpDataSource* poDS,
                                        const char* pszSchemaName,
@@ -100,6 +103,8 @@ class OGRPGDumpLayer : public OGRLayer
                                 { bLaunderColumnNames = bFlag; }
     void                SetPrecisionFlag( int bFlag )
                                 { bPreservePrecision = bFlag; }
+
+    void                SetOverrideColumnTypes( const char* pszOverrideColumnTypes );
 
     OGRErr              EndCopy();
 };

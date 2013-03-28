@@ -47,6 +47,7 @@ OGRSQLiteSelectLayer::OGRSQLiteSelectLayer( OGRSQLiteDataSource *poDSIn,
 
     iNextShapeId = 0;
     poFeatureDefn = NULL;
+    bAllowResetReadingEvenIfIndexAtZero = FALSE;
 
     std::set<CPLString> aosEmpty;
     BuildFeatureDefn( "SELECT", hStmtIn, aosEmpty );
@@ -81,10 +82,30 @@ OGRSQLiteSelectLayer::OGRSQLiteSelectLayer( OGRSQLiteDataSource *poDSIn,
                         if( eByteOrder == wkbNDR)
                             CPL_SWAP32PTR(&nSRSId);
 #endif
+                        CPLPushErrorHandler(CPLQuietErrorHandler);
                         poSRS = poDS->FetchSRS( nSRSId );
+                        CPLPopErrorHandler();
                         if( poSRS != NULL )
                             poSRS->Reference();
+                        else
+                            CPLErrorReset();
                     }
+#ifdef SQLITE_HAS_COLUMN_METADATA
+                    else
+                    {
+                        const char* pszTableName = sqlite3_column_table_name( hStmt, iCol );
+                        if( pszTableName != NULL )
+                        {
+                            OGRLayer* poLayer = poDS->GetLayerByName(pszTableName);
+                            if( poLayer != NULL )
+                            {
+                                poSRS = poLayer->GetSpatialRef();
+                                if( poSRS != NULL )
+                                    poSRS->Reference();
+                            }
+                        }
+                    }
+#endif
                     break;
                 }
             }
@@ -97,6 +118,20 @@ OGRSQLiteSelectLayer::OGRSQLiteSelectLayer( OGRSQLiteDataSource *poDSIn,
     osSQLCurrent = osSQLIn;
     this->bEmptyLayer = bEmptyLayer;
     bSpatialFilterInSQL = TRUE;
+}
+
+/************************************************************************/
+/*                            ResetReading()                            */
+/************************************************************************/
+
+void OGRSQLiteSelectLayer::ResetReading()
+
+{
+    if( iNextShapeId > 0 || bAllowResetReadingEvenIfIndexAtZero )
+    {
+        OGRSQLiteLayer::ResetReading();
+        bAllowResetReadingEvenIfIndexAtZero = FALSE;
+    }
 }
 
 /************************************************************************/
@@ -205,6 +240,8 @@ OGRErr OGRSQLiteSelectLayer::ResetStatement()
 void OGRSQLiteSelectLayer::SetSpatialFilter( OGRGeometry * poGeomIn )
 
 {
+    bAllowResetReadingEvenIfIndexAtZero = TRUE;
+
     if( InstallFilter( poGeomIn ) )
     {
         bSpatialFilterInSQL = RebuildSQLWithSpatialClause();
@@ -275,11 +312,8 @@ OGRSQLiteLayer* OGRSQLiteSelectLayer::GetBaseLayer(size_t& i)
             osBaseLayerName += osSQLBase[i];
     }
 
-    OGRSQLiteLayer* poUnderlyingLayer =
-        (OGRSQLiteLayer*) poDS->GetLayerByName(osBaseLayerName);
-
-    if( poUnderlyingLayer == NULL &&
-        strchr(osBaseLayerName, '(') == NULL &&
+    OGRSQLiteLayer* poUnderlyingLayer = NULL;
+    if( strchr(osBaseLayerName, '(') == NULL &&
         osGeomColumn.size() != 0 )
     {
         CPLString osNewUnderlyingTableName;
@@ -289,6 +323,8 @@ OGRSQLiteLayer* OGRSQLiteSelectLayer::GetBaseLayer(size_t& i)
         poUnderlyingLayer =
             (OGRSQLiteLayer*) poDS->GetLayerByName(osNewUnderlyingTableName);
     }
+    if( poUnderlyingLayer == NULL )
+        poUnderlyingLayer = (OGRSQLiteLayer*) poDS->GetLayerByName(osBaseLayerName);
 
     if( poUnderlyingLayer != NULL && poSRS != NULL &&
         poUnderlyingLayer->GetSpatialRef() != NULL &&

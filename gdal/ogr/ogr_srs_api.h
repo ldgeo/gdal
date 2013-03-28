@@ -409,6 +409,7 @@ OGRErr CPL_DLL OSRSetStatePlaneWithUnits( OGRSpatialReferenceH hSRS,
 OGRErr CPL_DLL OSRAutoIdentifyEPSG( OGRSpatialReferenceH hSRS );
 
 int    CPL_DLL OSREPSGTreatsAsLatLong( OGRSpatialReferenceH hSRS );
+int    CPL_DLL OSREPSGTreatsAsNorthingEasting( OGRSpatialReferenceH hSRS );
 const char CPL_DLL *OSRGetAxis( OGRSpatialReferenceH hSRS,
                                 const char *pszTargetKey, int iAxis, 
                                 OGRAxisOrientation *peOrientation );
@@ -624,7 +625,7 @@ OGRErr CPL_DLL OSRSetSOC( OGRSpatialReferenceH hSRS,
     
 /** Transverse Mercator
  *
- * Special processing available for Transverse Mercator with GDAL &gt;= 2.0 and PROJ &gt;= 4.8 :
+ * Special processing available for Transverse Mercator with GDAL &gt;= 1.10 and PROJ &gt;= 4.8 :
  * see OGRSpatialReference::exportToProj4().
  */
 
@@ -683,6 +684,8 @@ OCTTransformEx( OGRCoordinateTransformationH hCT,
 
 /* this is really private to OGR. */
 char *OCTProj4Normalize( const char *pszProj4Src );
+
+void OCTCleanupProjMutex();
 
 /* -------------------------------------------------------------------- */
 /*      Projection transform dictionary query.                          */

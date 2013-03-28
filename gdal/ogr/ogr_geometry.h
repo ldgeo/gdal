@@ -153,10 +153,10 @@ class CPL_DLL OGRGeometry
     virtual OGRGeometry *Polygonize() const;
 
     // backward compatibility to non-standard method names. 
-    OGRBoolean  Intersect( OGRGeometry * ) const;
-    OGRBoolean  Equal( OGRGeometry * ) const;
-    virtual OGRGeometry *SymmetricDifference( const OGRGeometry * ) const;
-    virtual OGRGeometry *getBoundary() const;
+    OGRBoolean  Intersect( OGRGeometry * ) const CPL_WARN_DEPRECATED("Non standard method. Use Intersects() instead");
+    OGRBoolean  Equal( OGRGeometry * ) const CPL_WARN_DEPRECATED("Non standard method. Use Equals() instead");
+    virtual OGRGeometry *SymmetricDifference( const OGRGeometry * ) const CPL_WARN_DEPRECATED("Non standard method. Use SymDifference() instead");
+    virtual OGRGeometry *getBoundary() const CPL_WARN_DEPRECATED("Non standard method. Use Boundary() instead");
     
     // Special HACK for DB2 7.2 support
     static int bGenerate_DB2_V72_BYTE_ORDER;
@@ -561,7 +561,10 @@ class CPL_DLL OGRMultiPolygon : public OGRGeometryCollection
     virtual OGRGeometry *clone() const;
     virtual OGRErr importFromWkt( char ** );
     virtual OGRErr exportToWkt( char ** ) const;
-    
+
+    // IGeometry methods
+    virtual int getDimension() const;
+
     // Non standard
     virtual OGRErr addGeometryDirectly( OGRGeometry * );
 
@@ -589,7 +592,10 @@ class CPL_DLL OGRMultiPoint : public OGRGeometryCollection
     virtual OGRGeometry *clone() const;
     virtual OGRErr importFromWkt( char ** );
     virtual OGRErr exportToWkt( char ** ) const;
-    
+
+    // IGeometry methods
+    virtual int getDimension() const;
+
     // Non standard
     virtual OGRErr addGeometryDirectly( OGRGeometry * );
 };
@@ -613,6 +619,9 @@ class CPL_DLL OGRMultiLineString : public OGRGeometryCollection
     virtual OGRGeometry *clone() const;
     virtual OGRErr importFromWkt( char ** );
     virtual OGRErr exportToWkt( char ** ) const;
+
+    // IGeometry methods
+    virtual int getDimension() const;
     
     // Non standard
     virtual OGRErr addGeometryDirectly( OGRGeometry * );
@@ -677,5 +686,13 @@ class CPL_DLL OGRGeometryFactory
 
 OGRwkbGeometryType CPL_DLL OGRFromOGCGeomType( const char *pszGeomType );
 const char CPL_DLL * OGRToOGCGeomType( OGRwkbGeometryType eGeomType );
+
+/* Prepared geometry API (needs GEOS >= 3.1.0) */
+typedef struct _OGRPreparedGeometry OGRPreparedGeometry;
+int OGRHasPreparedGeometrySupport();
+OGRPreparedGeometry* OGRCreatePreparedGeometry( const OGRGeometry* poGeom );
+void OGRDestroyPreparedGeometry( OGRPreparedGeometry* poPreparedGeom );
+int OGRPreparedGeometryIntersects( const OGRPreparedGeometry* poPreparedGeom,
+                                   const OGRGeometry* poOtherGeom );
 
 #endif /* ndef _OGR_GEOMETRY_H_INCLUDED */

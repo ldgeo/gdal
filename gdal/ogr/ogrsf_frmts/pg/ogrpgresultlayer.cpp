@@ -73,6 +73,7 @@ OGRPGResultLayer::OGRPGResultLayer( OGRPGDataSource *poDSIn,
         }
     }
 
+#ifndef PG_PRE74
     /* Determine the table from which the geometry column is extracted */
     if (iGeomCol != -1)
     {
@@ -94,6 +95,7 @@ OGRPGResultLayer::OGRPGResultLayer( OGRPGDataSource *poDSIn,
             OGRPGClearResult( hTableNameResult );
         }
     }
+#endif
 
     if (bHasPostGISGeography)
     {
@@ -210,8 +212,7 @@ int OGRPGResultLayer::TestCapability( const char * pszCap )
 OGRFeature *OGRPGResultLayer::GetNextFeature()
 
 {
-    if( m_poFilterGeom != NULL &&
-        (bHasPostGISGeometry || bHasPostGISGeography) && nSRSId == UNDETERMINED_SRID )
+    if( (bHasPostGISGeometry || bHasPostGISGeography) && nSRSId == UNDETERMINED_SRID )
     {
         GetSpatialRef(); /* make sure that we fetch the SRID if not already done */
     }

@@ -48,7 +48,10 @@ class OGRPDFDataSource;
 class OGRPDFLayer : public OGRMemLayer
 {
     OGRPDFDataSource* poDS;
-    public:
+    int               bGeomTypeSet;
+    int               bGeomTypeMixed;
+
+public:
         OGRPDFLayer(OGRPDFDataSource* poDS,
                     const char * pszName,
                     OGRSpatialReference *poSRS,
@@ -63,6 +66,9 @@ class OGRPDFLayer : public OGRMemLayer
 /************************************************************************/
 /*                           OGRPDFDataSource                           */
 /************************************************************************/
+
+#define MAX_TOKEN_SIZE 256
+#define TOKEN_STACK_SIZE 8
 
 class OGRPDFDataSource : public OGRDataSource
 {
@@ -91,8 +97,10 @@ class OGRPDFDataSource : public OGRDataSource
 
     std::map<CPLString, int> oMapOperators;
     void                InitMapOperators();
+    
+    int                 bSetStyle;
 
-    void                ExploreTree(GDALPDFObject* poObj);
+    void                ExploreTree(GDALPDFObject* poObj, int nRecLevel);
     void                ExploreContents(GDALPDFObject* poObj, GDALPDFObject* poResources);
 
     void                ExploreContentsNonStructuredInternal(GDALPDFObject* poContents,
@@ -100,8 +108,10 @@ class OGRPDFDataSource : public OGRDataSource
                                                              std::map<CPLString, OGRPDFLayer*>& oMapPropertyToLayer);
     void                ExploreContentsNonStructured(GDALPDFObject* poObj, GDALPDFObject* poResources);
 
-    int                 UnstackTokens(const CPLString& osToken,
-                                      std::stack<CPLString>& osTokenStack,
+    int                 UnstackTokens(const char* pszToken,
+                                      int nRequiredArgs,
+                                      char aszTokenStack[TOKEN_STACK_SIZE][MAX_TOKEN_SIZE],
+                                      int& nTokenStackSize,
                                       double* adfCoords);
     OGRGeometry*        ParseContent(const char* pszContent,
                                      GDALPDFObject* poResources,

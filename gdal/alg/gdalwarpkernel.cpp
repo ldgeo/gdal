@@ -30,6 +30,7 @@
  ****************************************************************************/
 
 #include "gdalwarper.h"
+#include "gdal_alg_priv.h"
 #include "cpl_string.h"
 #include "gdalwarpkernel_opencl.h"
 #include "cpl_atomic_ops.h"
@@ -198,7 +199,7 @@ static CPLErr GWKRun( GDALWarpKernel *poWK,
     else
     {
         GWKJobStruct* pasThreadJob =
-            (GWKJobStruct*)CPLMalloc(sizeof(GWKJobStruct) * nThreads);
+            (GWKJobStruct*)CPLCalloc(sizeof(GWKJobStruct), nThreads);
 
 /* -------------------------------------------------------------------- */
 /*      Duplicate pTransformerArg per thread.                           */
@@ -206,45 +207,24 @@ static CPLErr GWKRun( GDALWarpKernel *poWK,
         int i;
         int bTransformerCloningSuccess = TRUE;
 
-        CPLXMLNode* psTransformerNode = GDALSerializeTransformer(
-                            poWK->pfnTransformer, poWK->pTransformerArg );
-        if (psTransformerNode == NULL)
+        for(i=0;i<nThreads;i++)
         {
-            CPLDebug("WARP", "Cannot serialize transformer");
-            bTransformerCloningSuccess = FALSE;
-        }
-        else
-        {
-            for(i=0;i<nThreads;i++)
+            pasThreadJob[i].pTransformerArg = GDALCloneTransformer(poWK->pTransformerArg);
+            if( pasThreadJob[i].pTransformerArg == NULL )
             {
-                GDALTransformerFunc pfnTransformer = NULL;
-                if (GDALDeserializeTransformer(psTransformerNode,
-                       &pfnTransformer, &(pasThreadJob[i].pTransformerArg))
-                                                                    != CE_None)
-                {
-                    CPLDebug("WARP", "Cannot deserialize transformer");
-                    bTransformerCloningSuccess = FALSE;
-                    break;
-                }
-#if 0
-                /* Sanity check that should not fail, but does not work on Windows */
-                /* due to the way pointers to functions work. */
-                if (pfnTransformer != poWK->pfnTransformer)
-                {
-                    CPLDebug("WARP", "Deserialized transformer function is "
-                             "different from source transformer function");
-                    GDALDestroyTransformer(pasThreadJob[i].pTransformerArg);
-                    bTransformerCloningSuccess = FALSE;
-                    break;
-                }
-#endif
+                CPLDebug("WARP", "Cannot deserialize transformer");
+                bTransformerCloningSuccess = FALSE;
+                break;
             }
-
-            CPLDestroyXMLNode(psTransformerNode);
         }
 
         if (!bTransformerCloningSuccess)
         {
+            for(i=0;i<nThreads;i++)
+            {
+                if( pasThreadJob[i].pTransformerArg )
+                    GDALDestroyTransformer(pasThreadJob[i].pTransformerArg);
+            }
             CPLFree(pasThreadJob);
 
             CPLDebug("WARP", "Cannot duplicate transformer function. "
@@ -255,6 +235,11 @@ static CPLErr GWKRun( GDALWarpKernel *poWK,
         void* hCond = CPLCreateCond();
         if (hCond == NULL)
         {
+            for(i=0;i<nThreads;i++)
+            {
+                if( pasThreadJob[i].pTransformerArg )
+                    GDALDestroyTransformer(pasThreadJob[i].pTransformerArg);
+            }
             CPLFree(pasThreadJob);
 
             CPLDebug("WARP", "Multithreading disabled. "
@@ -813,6 +798,10 @@ CPLErr GDALWarpKernel::PerformWarp()
 
     dfXScale = (double)nDstXSize / nSrcXSize;
     dfYScale = (double)nDstYSize / nSrcYSize;
+    if( nSrcXSize >= nDstXSize && nSrcXSize <= nDstXSize + 1 + 2 * anGWKFilterRadius[eResample] )
+        dfXScale = 1;
+    if( nSrcYSize >= nDstYSize && nSrcYSize <= nDstYSize + 1 + 2 * anGWKFilterRadius[eResample] )
+        dfYScale = 1;
 
     dfXFilter = anGWKFilterRadius[eResample];
     dfYFilter = anGWKFilterRadius[eResample];
@@ -975,6 +964,18 @@ CPLErr GDALWarpKernel::Validate()
     {
         CPLError( CE_Failure, CPLE_AppDefined, 
                   "Unsupported resampling method %d.", (int) eResample );
+        return CE_Failure;
+    }
+    
+    // Safety check for callers that would use GDALWarpKernel without using
+    // GDALWarpOperation.
+    if( (eResample == GRA_CubicSpline || eResample == GRA_Lanczos) &&
+         atoi(CSLFetchNameValueDef(papszWarpOptions, "EXTRA_ELTS", "0") ) != WARP_EXTRA_ELTS )
+    {
+        CPLError( CE_Failure, CPLE_AppDefined,
+                  "Source arrays must have WARP_EXTRA_ELTS extra elements at their end. "
+                  "See GDALWarpKernel class definition. If this condition is fulfilled, "
+                  "define a EXTRA_ELTS=%d warp options", WARP_EXTRA_ELTS);
         return CE_Failure;
     }
 
@@ -1309,70 +1310,77 @@ static int GWKGetPixelValue( GDALWarpKernel *poWK, int iBand,
 /*                          GWKGetPixelRow()                            */
 /************************************************************************/
 
+/* It is assumed that adfImag[] is set to 0 by caller code for non-complex */
+/* data-types. */
+
 static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand, 
                            int iSrcOffset, int nHalfSrcLen,
-                           double adfDensity[],
-                           double adfReal[], double adfImag[] )
+                           double* padfDensity,
+                           double adfReal[],
+                           double* padfImag )
 {
     // We know that nSrcLen is even, so we can *always* unroll loops 2x
     int     nSrcLen = nHalfSrcLen * 2;
     int     bHasValid = FALSE;
     int     i;
     
-    // Init the density
-    for ( i = 0; i < nSrcLen; i += 2 )
+    if( padfDensity != NULL )
     {
-        adfDensity[i] = 1.0;
-        adfDensity[i+1] = 1.0;
-    }
-    
-    if ( poWK->panUnifiedSrcValid != NULL )
-    {
+        // Init the density
         for ( i = 0; i < nSrcLen; i += 2 )
         {
-            if(poWK->panUnifiedSrcValid[(iSrcOffset+i)>>5]
-               & (0x01 << ((iSrcOffset+i) & 0x1f)))
-                bHasValid = TRUE;
-            else
-                adfDensity[i] = 0.0;
-            
-            if(poWK->panUnifiedSrcValid[(iSrcOffset+i+1)>>5]
-               & (0x01 << ((iSrcOffset+i+1) & 0x1f)))
-                bHasValid = TRUE;
-            else
-                adfDensity[i+1] = 0.0;
-        }
-
-        // Reset or fail as needed
-        if ( bHasValid )
-            bHasValid = FALSE;
-        else
-            return FALSE;
-    }
-    
-    if ( poWK->papanBandSrcValid != NULL
-         && poWK->papanBandSrcValid[iBand] != NULL)
-    {
-        for ( i = 0; i < nSrcLen; i += 2 )
-        {
-            if(poWK->papanBandSrcValid[iBand][(iSrcOffset+i)>>5]
-               & (0x01 << ((iSrcOffset+i) & 0x1f)))
-                bHasValid = TRUE;
-            else
-                adfDensity[i] = 0.0;
-            
-            if(poWK->papanBandSrcValid[iBand][(iSrcOffset+i+1)>>5]
-               & (0x01 << ((iSrcOffset+i+1) & 0x1f)))
-                bHasValid = TRUE;
-            else
-                adfDensity[i+1] = 0.0;
+            padfDensity[i] = 1.0;
+            padfDensity[i+1] = 1.0;
         }
         
-        // Reset or fail as needed
-        if ( bHasValid )
-            bHasValid = FALSE;
-        else
-            return FALSE;
+        if ( poWK->panUnifiedSrcValid != NULL )
+        {
+            for ( i = 0; i < nSrcLen; i += 2 )
+            {
+                if(poWK->panUnifiedSrcValid[(iSrcOffset+i)>>5]
+                & (0x01 << ((iSrcOffset+i) & 0x1f)))
+                    bHasValid = TRUE;
+                else
+                    padfDensity[i] = 0.0;
+                
+                if(poWK->panUnifiedSrcValid[(iSrcOffset+i+1)>>5]
+                & (0x01 << ((iSrcOffset+i+1) & 0x1f)))
+                    bHasValid = TRUE;
+                else
+                    padfDensity[i+1] = 0.0;
+            }
+
+            // Reset or fail as needed
+            if ( bHasValid )
+                bHasValid = FALSE;
+            else
+                return FALSE;
+        }
+        
+        if ( poWK->papanBandSrcValid != NULL
+            && poWK->papanBandSrcValid[iBand] != NULL)
+        {
+            for ( i = 0; i < nSrcLen; i += 2 )
+            {
+                if(poWK->papanBandSrcValid[iBand][(iSrcOffset+i)>>5]
+                & (0x01 << ((iSrcOffset+i) & 0x1f)))
+                    bHasValid = TRUE;
+                else
+                    padfDensity[i] = 0.0;
+                
+                if(poWK->papanBandSrcValid[iBand][(iSrcOffset+i+1)>>5]
+                & (0x01 << ((iSrcOffset+i+1) & 0x1f)))
+                    bHasValid = TRUE;
+                else
+                    padfDensity[i+1] = 0.0;
+            }
+            
+            // Reset or fail as needed
+            if ( bHasValid )
+                bHasValid = FALSE;
+            else
+                return FALSE;
+        }
     }
     
     // Fetch data
@@ -1387,7 +1395,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
         }
 
@@ -1400,7 +1407,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
         }
 
@@ -1413,7 +1419,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
          }
 
@@ -1426,7 +1431,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
         }
 
@@ -1439,7 +1443,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
         }
 
@@ -1452,7 +1455,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
         }
 
@@ -1465,7 +1467,6 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
                 adfReal[i] = pSrc[i];
                 adfReal[i+1] = pSrc[i+1];
             }
-            memset( adfImag, 0, nSrcLen * sizeof(double) );
             break;
        }
 
@@ -1476,10 +1477,10 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
             for ( i = 0; i < nSrcLen; i += 2 )
             {
                 adfReal[i] = pSrc[2*i];
-                adfImag[i] = pSrc[2*i+1];
+                padfImag[i] = pSrc[2*i+1];
 
                 adfReal[i+1] = pSrc[2*i+2];
-                adfImag[i+1] = pSrc[2*i+3];
+                padfImag[i+1] = pSrc[2*i+3];
             }
             break;
         }
@@ -1491,10 +1492,10 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
             for ( i = 0; i < nSrcLen; i += 2 )
             {
                 adfReal[i] = pSrc[2*i];
-                adfImag[i] = pSrc[2*i+1];
+                padfImag[i] = pSrc[2*i+1];
 
                 adfReal[i+1] = pSrc[2*i+2];
-                adfImag[i+1] = pSrc[2*i+3];
+                padfImag[i+1] = pSrc[2*i+3];
             }
             break;
         }
@@ -1506,10 +1507,10 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
             for ( i = 0; i < nSrcLen; i += 2 )
             {
                 adfReal[i] = pSrc[2*i];
-                adfImag[i] = pSrc[2*i+1];
+                padfImag[i] = pSrc[2*i+1];
 
                 adfReal[i+1] = pSrc[2*i+2];
-                adfImag[i+1] = pSrc[2*i+3];
+                padfImag[i+1] = pSrc[2*i+3];
             }
             break;
         }
@@ -1522,34 +1523,38 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
             for ( i = 0; i < nSrcLen; i += 2 )
             {
                 adfReal[i] = pSrc[2*i];
-                adfImag[i] = pSrc[2*i+1];
+                padfImag[i] = pSrc[2*i+1];
 
                 adfReal[i+1] = pSrc[2*i+2];
-                adfImag[i+1] = pSrc[2*i+3];
+                padfImag[i+1] = pSrc[2*i+3];
             }
             break;
         }
 
         default:
             CPLAssert(FALSE);
-            memset( adfDensity, 0, nSrcLen * sizeof(double) );
+            if( padfDensity )
+                memset( padfDensity, 0, nSrcLen * sizeof(double) );
             return FALSE;
     }
-    
+
+    if( padfDensity == NULL )
+        return TRUE;
+
     if( poWK->pafUnifiedSrcDensity == NULL )
     {
         for ( i = 0; i < nSrcLen; i += 2 )
         {
             // Take into account earlier calcs
-            if(adfDensity[i] > 0.000000001)
+            if(padfDensity[i] > 0.000000001)
             {
-                adfDensity[i] = 1.0;
+                padfDensity[i] = 1.0;
                 bHasValid = TRUE;
             }
             
-            if(adfDensity[i+1] > 0.000000001)
+            if(padfDensity[i+1] > 0.000000001)
             {
-                adfDensity[i+1] = 1.0;
+                padfDensity[i+1] = 1.0;
                 bHasValid = TRUE;
             }
         }
@@ -1558,14 +1563,14 @@ static int GWKGetPixelRow( GDALWarpKernel *poWK, int iBand,
     {
         for ( i = 0; i < nSrcLen; i += 2 )
         {
-            if(adfDensity[i] > 0.000000001)
-                adfDensity[i] = poWK->pafUnifiedSrcDensity[iSrcOffset+i];
-            if(adfDensity[i] > 0.000000001)
+            if(padfDensity[i] > 0.000000001)
+                padfDensity[i] = poWK->pafUnifiedSrcDensity[iSrcOffset+i];
+            if(padfDensity[i] > 0.000000001)
                 bHasValid = TRUE;
             
-            if(adfDensity[i+1] > 0.000000001)
-                adfDensity[i+1] = poWK->pafUnifiedSrcDensity[iSrcOffset+i+1];
-            if(adfDensity[i+1] > 0.000000001)
+            if(padfDensity[i+1] > 0.000000001)
+                padfDensity[i+1] = poWK->pafUnifiedSrcDensity[iSrcOffset+i+1];
+            if(padfDensity[i+1] > 0.000000001)
                 bHasValid = TRUE;
         }
     }
@@ -1692,7 +1697,7 @@ static int GWKBilinearResample( GDALWarpKernel *poWK, int iBand,
     int     iSrcOffset;
     double  dfRatioX = 1.5 - (dfSrcX - iSrcX);
     double  dfRatioY = 1.5 - (dfSrcY - iSrcY);
-    double  adfDensity[2], adfReal[2], adfImag[2];
+    double  adfDensity[2], adfReal[2], adfImag[2] = {0, 0};
     double  dfAccumulatorReal = 0.0, dfAccumulatorImag = 0.0;
     double  dfAccumulatorDensity = 0.0;
     double  dfAccumulatorDivisor = 0.0;
@@ -2030,7 +2035,7 @@ static int GWKCubicResample( GDALWarpKernel *poWK, int iBand,
     double  dfDeltaX3 = dfDeltaX2 * dfDeltaX;
     double  dfDeltaY3 = dfDeltaY2 * dfDeltaY;
     double  adfValueDens[4], adfValueReal[4], adfValueImag[4];
-    double  adfDensity[4], adfReal[4], adfImag[4];
+    double  adfDensity[4], adfReal[4], adfImag[4] = {0, 0, 0, 0};
     int     i;
 
     // Get the bilinear interpolation at the image borders
@@ -2184,17 +2189,19 @@ static int GWKCubicResampleNoMasksShort( GDALWarpKernel *poWK, int iBand,
  */
 
 #define GWK_PI 3.14159265358979323846
+
 static double GWKLanczosSinc( double dfX, double dfR )
 {
-    if ( fabs(dfX) > dfR )
-        return 0.0;
     if ( dfX == 0.0 )
         return 1.0;
-    
-    double dfPIX = GWK_PI * dfX;
-    return ( sin(dfPIX) / dfPIX ) * ( sin(dfPIX / dfR) * dfR / dfPIX );
+
+    const double dfPIX = GWK_PI * dfX;
+    const double dfPIXoverR = dfPIX / dfR;
+    const double dfPIX2overR = dfPIX * dfPIXoverR;
+    return sin(dfPIX) * sin(dfPIXoverR) / dfPIX2overR;
 }
-#undef GWK_PI
+
+//#undef GWK_PI
 
 /************************************************************************/
 /*                           GWKBSpline()                               */
@@ -2219,17 +2226,54 @@ static double GWKBSpline( double x )
 }
 
 
-typedef struct
+/************************************************************************/
+/*                       GWKResampleWrkStruct                           */
+/************************************************************************/
+
+typedef struct _GWKResampleWrkStruct GWKResampleWrkStruct;
+
+typedef int (*pfnGWKResampleType) ( GDALWarpKernel *poWK, int iBand, 
+                                    double dfSrcX, double dfSrcY,
+                                    double *pdfDensity, 
+                                    double *pdfReal, double *pdfImag,
+                                    GWKResampleWrkStruct* psWrkStruct );
+
+
+struct _GWKResampleWrkStruct
 {
+    pfnGWKResampleType pfnGWKResample;
+
     // Space for saved X weights
     double  *padfWeightsX;
     char    *panCalcX;
+
+    double  *padfWeightsY; // only used by GWKResampleOptimizedLanczos
+    int      iLastSrcX; // only used by GWKResampleOptimizedLanczos
+    int      iLastSrcY; // only used by GWKResampleOptimizedLanczos
+    double   dfLastDeltaX; // only used by GWKResampleOptimizedLanczos
+    double   dfLastDeltaY; // only used by GWKResampleOptimizedLanczos
 
     // Space for saving a row of pixels
     double  *padfRowDensity;
     double  *padfRowReal;
     double  *padfRowImag;
-} GWKResampleWrkStruct;
+};
+
+/************************************************************************/
+/*                    GWKResampleCreateWrkStruct()                      */
+/************************************************************************/
+
+static int GWKResample( GDALWarpKernel *poWK, int iBand, 
+                        double dfSrcX, double dfSrcY,
+                        double *pdfDensity, 
+                        double *pdfReal, double *pdfImag,
+                        GWKResampleWrkStruct* psWrkStruct );
+
+static int GWKResampleOptimizedLanczos( GDALWarpKernel *poWK, int iBand, 
+                                        double dfSrcX, double dfSrcY,
+                                        double *pdfDensity, 
+                                        double *pdfReal, double *pdfImag,
+                                        GWKResampleWrkStruct* psWrkStruct );
 
 static GWKResampleWrkStruct* GWKResampleCreateWrkStruct(GDALWarpKernel *poWK)
 {
@@ -2241,18 +2285,79 @@ static GWKResampleWrkStruct* GWKResampleCreateWrkStruct(GDALWarpKernel *poWK)
     // Alloc space for saved X weights
     psWrkStruct->padfWeightsX = (double *)CPLCalloc( nXDist, sizeof(double) );
     psWrkStruct->panCalcX = (char *)CPLMalloc( nXDist * sizeof(char) );
+    
+    psWrkStruct->padfWeightsY = (double *)CPLCalloc( nXDist, sizeof(double) );
+    psWrkStruct->iLastSrcX = -10;
+    psWrkStruct->iLastSrcY = -10;
+    psWrkStruct->dfLastDeltaX = -10;
+    psWrkStruct->dfLastDeltaY = -10;
 
     // Alloc space for saving a row of pixels
-    psWrkStruct->padfRowDensity = (double *)CPLCalloc( nXDist, sizeof(double) );
+    if( poWK->pafUnifiedSrcDensity == NULL &&
+        poWK->panUnifiedSrcValid == NULL &&
+        poWK->papanBandSrcValid == NULL )
+    {
+        psWrkStruct->padfRowDensity = NULL;
+    }
+    else
+    {
+        psWrkStruct->padfRowDensity = (double *)CPLCalloc( nXDist, sizeof(double) );
+    }
     psWrkStruct->padfRowReal = (double *)CPLCalloc( nXDist, sizeof(double) );
     psWrkStruct->padfRowImag = (double *)CPLCalloc( nXDist, sizeof(double) );
+
+    if( poWK->eResample == GRA_Lanczos &&
+        poWK->dfXFilter == 3.0 &&
+        poWK->dfYFilter == 3.0 )
+    {
+        psWrkStruct->pfnGWKResample = GWKResampleOptimizedLanczos;
+
+        const double dfXScale = poWK->dfXScale;
+        if( dfXScale < 1.0 )
+        {
+            int iMin = poWK->nFiltInitX, iMax = poWK->nXRadius;
+            while( iMin * dfXScale < -3.0 )
+                iMin ++;
+            while( iMax * dfXScale > 3.0 )
+                iMax --;
+
+            for(int i = iMin; i <= iMax; ++i)
+            {
+                psWrkStruct->padfWeightsX[i-poWK->nFiltInitX] =
+                    GWKLanczosSinc(i * dfXScale, poWK->dfXFilter) * dfXScale;
+            }
+        }
+
+        const double dfYScale = poWK->dfYScale;
+        if( dfYScale < 1.0 )
+        {
+            int jMin = poWK->nFiltInitY, jMax = poWK->nYRadius;
+            while( jMin * dfYScale < -3.0 )
+                jMin ++;
+            while( jMax * dfYScale > 3.0 )
+                jMax --;
+
+            for(int j = jMin; j <= jMax; ++j)
+            {
+                psWrkStruct->padfWeightsY[j-poWK->nFiltInitY] =
+                    GWKLanczosSinc(j * dfYScale, poWK->dfYFilter) * dfYScale;
+            }
+        }
+    }
+    else
+        psWrkStruct->pfnGWKResample = GWKResample;
 
     return psWrkStruct;
 }
 
+/************************************************************************/
+/*                    GWKResampleDeleteWrkStruct()                      */
+/************************************************************************/
+
 static void GWKResampleDeleteWrkStruct(GWKResampleWrkStruct* psWrkStruct)
 {
     CPLFree( psWrkStruct->padfWeightsX );
+    CPLFree( psWrkStruct->padfWeightsY );
     CPLFree( psWrkStruct->panCalcX );
     CPLFree( psWrkStruct->padfRowDensity );
     CPLFree( psWrkStruct->padfRowReal );
@@ -2268,39 +2373,28 @@ static int GWKResample( GDALWarpKernel *poWK, int iBand,
                         double dfSrcX, double dfSrcY,
                         double *pdfDensity, 
                         double *pdfReal, double *pdfImag,
-                        const GWKResampleWrkStruct* psWrkStruct )
+                        GWKResampleWrkStruct* psWrkStruct )
 
 {
     // Save as local variables to avoid following pointers in loops
-    int     nSrcXSize = poWK->nSrcXSize;
-    int     nSrcYSize = poWK->nSrcYSize;
+    const int     nSrcXSize = poWK->nSrcXSize;
+    const int     nSrcYSize = poWK->nSrcYSize;
 
     double  dfAccumulatorReal = 0.0, dfAccumulatorImag = 0.0;
     double  dfAccumulatorDensity = 0.0;
     double  dfAccumulatorWeight = 0.0;
-    int     iSrcX = (int) floor( dfSrcX - 0.5 );
-    int     iSrcY = (int) floor( dfSrcY - 0.5 );
-    int     iSrcOffset = iSrcX + iSrcY * nSrcXSize;
-    double  dfDeltaX = dfSrcX - 0.5 - iSrcX;
-    double  dfDeltaY = dfSrcY - 0.5 - iSrcY;
-    int     eResample = poWK->eResample;
+    const int     iSrcX = (int) floor( dfSrcX - 0.5 );
+    const int     iSrcY = (int) floor( dfSrcY - 0.5 );
+    const int     iSrcOffset = iSrcX + iSrcY * nSrcXSize;
+    const double  dfDeltaX = dfSrcX - 0.5 - iSrcX;
+    const double  dfDeltaY = dfSrcY - 0.5 - iSrcY;
+    const int     eResample = poWK->eResample;
 
-    double  dfXScale, dfYScale;
-    double  dfXFilter, dfYFilter;
-    int     nXRadius, nFiltInitX;
-    int     nYRadius, nFiltInitY;
-
-    dfXScale = poWK->dfXScale;
-    dfYScale = poWK->dfYScale;
-    nXRadius = poWK->nXRadius;
-    nYRadius = poWK->nYRadius;
-    nFiltInitX = poWK->nFiltInitX;
-    nFiltInitY = poWK->nFiltInitY;
-    dfXFilter = poWK->dfXFilter;
-    dfYFilter = poWK->dfYFilter;
+    const double  dfXScale = poWK->dfXScale, dfYScale = poWK->dfYScale;
+    const double  dfXFilter = poWK->dfXFilter, dfYFilter = poWK->dfYFilter;
 
     int     i, j;
-    int     nXDist = ( nXRadius + 1 ) * 2;
+    const int     nXDist = ( poWK->nXRadius + 1 ) * 2;
 
     // Space for saved X weights
     double  *padfWeightsX = psWrkStruct->padfWeightsX;
@@ -2314,93 +2408,106 @@ static int GWKResample( GDALWarpKernel *poWK, int iBand,
     // Mark as needing calculation (don't calculate the weights yet,
     // because a mask may render it unnecessary)
     memset( panCalcX, FALSE, nXDist * sizeof(char) );
+    
+    CPLAssert( eResample == GRA_CubicSpline || eResample == GRA_Lanczos );
+
+    // Skip sampling over edge of image
+    j = poWK->nFiltInitY;
+    int jMax= poWK->nYRadius;
+    if( iSrcY + j < 0 )
+        j = -iSrcY;
+    if( iSrcY + jMax >= nSrcYSize )
+        jMax = nSrcYSize - iSrcY - 1;
+        
+    int iMin = poWK->nFiltInitX, iMax = poWK->nXRadius;
+    if( iSrcX + iMin < 0 )
+        iMin = -iSrcX;
+    if( iSrcX + iMax >= nSrcXSize )
+        iMax = nSrcXSize - iSrcX - 1;
+
+    const int bXScaleBelow1 = ( dfXScale < 1.0 );
+    const int bYScaleBelow1 = ( dfYScale < 1.0 );
+
+    int iRowOffset = iSrcOffset + (j - 1) * nSrcXSize + iMin;
 
     // Loop over pixel rows in the kernel
-    for ( j = nFiltInitY; j <= nYRadius; ++j )
+    for ( ; j <= jMax; ++j )
     {
-        int     iRowOffset, nXMin = nFiltInitX, nXMax = nXRadius;
         double  dfWeight1;
-        
-        // Skip sampling over edge of image
-        if ( iSrcY + j < 0 || iSrcY + j >= nSrcYSize )
-            continue;
 
-        // Invariant; needs calculation only once per row
-        iRowOffset = iSrcOffset + j * nSrcXSize + nFiltInitX;
-
-        // Make sure we don't read before or after the source array.
-        if ( iRowOffset < 0 )
-        {
-            nXMin = nXMin - iRowOffset;
-            iRowOffset = 0;
-        }
-        if ( iRowOffset + nXDist >= nSrcXSize*nSrcYSize )
-        {
-            nXMax = nSrcXSize*nSrcYSize - iRowOffset + nXMin - 1;
-            nXMax -= (nXMax-nXMin+1) % 2;
-        }
+        iRowOffset += nSrcXSize;
 
         // Get pixel values
-        if ( !GWKGetPixelRow( poWK, iBand, iRowOffset, (nXMax-nXMin+2)/2,
+        // We can potentially read extra elements after the "normal" end of the source arrays,
+        // but the contract of papabySrcImage[iBand], papanBandSrcValid[iBand],
+        // panUnifiedSrcValid and pafUnifiedSrcDensity is to have WARP_EXTRA_ELTS
+        // reserved at their end.
+        if ( !GWKGetPixelRow( poWK, iBand, iRowOffset, (iMax-iMin+2)/2,
                               padfRowDensity, padfRowReal, padfRowImag ) )
             continue;
 
         // Select the resampling algorithm
         if ( eResample == GRA_CubicSpline )
             // Calculate the Y weight
-            dfWeight1 = ( dfYScale < 1.0 ) ?
+            dfWeight1 = ( bYScaleBelow1 ) ?
                 GWKBSpline(((double)j) * dfYScale) * dfYScale :
                 GWKBSpline(((double)j) - dfDeltaY);
-        else if ( eResample == GRA_Lanczos )
-            dfWeight1 = ( dfYScale < 1.0 ) ?
-                GWKLanczosSinc(j * dfYScale, dfYFilter) * dfYScale :
-                GWKLanczosSinc(j - dfDeltaY, dfYFilter);
-        else
-            return FALSE;
-        
+        else /*if ( eResample == GRA_Lanczos )*/
+        {
+            if( bYScaleBelow1 )
+                dfWeight1 = GWKLanczosSinc(j * dfYScale, dfYFilter) * dfYScale;
+            else
+                dfWeight1 = GWKLanczosSinc(j - dfDeltaY, dfYFilter);
+        }
+
         // Iterate over pixels in row
-        for (i = nXMin; i <= nXMax; ++i )
+        for (i = iMin; i <= iMax; ++i )
         {
             double dfWeight2;
-            
-            // Skip sampling at edge of image OR if pixel has zero density
-            if ( iSrcX + i < 0 || iSrcX + i >= nSrcXSize
-                 || padfRowDensity[i-nXMin] < 0.000000001 )
+
+            // Skip sampling if pixel has zero density
+            if ( padfRowDensity != NULL &&
+                 padfRowDensity[i-iMin] < 0.000000001 )
                 continue;
 
             // Make or use a cached set of weights for this row
-            if ( panCalcX[i-nFiltInitX] )
+            if ( panCalcX[i-iMin] )
                 // Use saved weight value instead of recomputing it
-                dfWeight2 = dfWeight1 * padfWeightsX[i-nFiltInitX];
+                dfWeight2 = dfWeight1 * padfWeightsX[i-iMin];
             else
             {
                 // Choose among possible algorithms
                 if ( eResample == GRA_CubicSpline )
                     // Calculate & save the X weight
-                    padfWeightsX[i-nFiltInitX] = dfWeight2 = (dfXScale < 1.0 ) ?
+                    padfWeightsX[i-iMin] = dfWeight2 = ( bXScaleBelow1 ) ?
                         GWKBSpline((double)i * dfXScale) * dfXScale :
                         GWKBSpline(dfDeltaX - (double)i);
-                else if ( eResample == GRA_Lanczos )
+                else /*if ( eResample == GRA_Lanczos )*/
+                {
                     // Calculate & save the X weight
-                    padfWeightsX[i-nFiltInitX] = dfWeight2 = (dfXScale < 1.0 ) ?
-                        GWKLanczosSinc(i * dfXScale, dfXFilter) * dfXScale :
-                        GWKLanczosSinc(i - dfDeltaX, dfXFilter);
-                else
-                    return FALSE;
-                
+                    if( bXScaleBelow1 )
+                        padfWeightsX[i-iMin] = dfWeight2 =
+                            GWKLanczosSinc(i * dfXScale, dfXFilter) * dfXScale;
+                    else
+                        padfWeightsX[i-iMin] = dfWeight2 = 
+                            GWKLanczosSinc(i - dfDeltaX, dfXFilter);
+                }
+
                 dfWeight2 *= dfWeight1;
-                panCalcX[i-nFiltInitX] = TRUE;
+                panCalcX[i-iMin] = TRUE;
             }
-            
+
             // Accumulate!
-            dfAccumulatorReal += padfRowReal[i-nXMin] * dfWeight2;
-            dfAccumulatorImag += padfRowImag[i-nXMin] * dfWeight2;
-            dfAccumulatorDensity += padfRowDensity[i-nXMin] * dfWeight2;
+            dfAccumulatorReal += padfRowReal[i-iMin] * dfWeight2;
+            dfAccumulatorImag += padfRowImag[i-iMin] * dfWeight2;
+            if( padfRowDensity != NULL )
+                dfAccumulatorDensity += padfRowDensity[i-iMin] * dfWeight2;
             dfAccumulatorWeight += dfWeight2;
         }
     }
 
-    if ( dfAccumulatorWeight < 0.000001 || dfAccumulatorDensity < 0.000001 )
+    if ( dfAccumulatorWeight < 0.000001 ||
+         (padfRowDensity != NULL && dfAccumulatorDensity < 0.000001) )
     {
         *pdfDensity = 0.0;
         return FALSE;
@@ -2411,13 +2518,307 @@ static int GWKResample( GDALWarpKernel *poWK, int iBand,
     {
         *pdfReal = dfAccumulatorReal / dfAccumulatorWeight;
         *pdfImag = dfAccumulatorImag / dfAccumulatorWeight;
-        *pdfDensity = dfAccumulatorDensity / dfAccumulatorWeight;
+        if( padfRowDensity != NULL )
+            *pdfDensity = dfAccumulatorDensity / dfAccumulatorWeight;
+        else
+            *pdfDensity = 1.0;
     }
     else
     {
         *pdfReal = dfAccumulatorReal;
         *pdfImag = dfAccumulatorImag;
-        *pdfDensity = dfAccumulatorDensity;
+        if( padfRowDensity != NULL )
+            *pdfDensity = dfAccumulatorDensity;
+        else
+            *pdfDensity = 1.0;
+    }
+    
+    return TRUE;
+}
+
+/************************************************************************/
+/*                      GWKResampleOptimizedLanczos()                   */
+/************************************************************************/
+
+static int GWKResampleOptimizedLanczos( GDALWarpKernel *poWK, int iBand, 
+                        double dfSrcX, double dfSrcY,
+                        double *pdfDensity, 
+                        double *pdfReal, double *pdfImag,
+                        GWKResampleWrkStruct* psWrkStruct )
+
+{
+    // Save as local variables to avoid following pointers in loops
+    const int     nSrcXSize = poWK->nSrcXSize;
+    const int     nSrcYSize = poWK->nSrcYSize;
+
+    double  dfAccumulatorReal = 0.0, dfAccumulatorImag = 0.0;
+    double  dfAccumulatorDensity = 0.0;
+    double  dfAccumulatorWeight = 0.0;
+    const int     iSrcX = (int) floor( dfSrcX - 0.5 );
+    const int     iSrcY = (int) floor( dfSrcY - 0.5 );
+    const int     iSrcOffset = iSrcX + iSrcY * nSrcXSize;
+    const double  dfDeltaX = dfSrcX - 0.5 - iSrcX;
+    const double  dfDeltaY = dfSrcY - 0.5 - iSrcY;
+
+    const double  dfXScale = poWK->dfXScale, dfYScale = poWK->dfYScale;
+
+    // Space for saved X weights
+    double  *padfWeightsX = psWrkStruct->padfWeightsX;
+    double  *padfWeightsY = psWrkStruct->padfWeightsY;
+
+    // Space for saving a row of pixels
+    double  *padfRowDensity = psWrkStruct->padfRowDensity;
+    double  *padfRowReal = psWrkStruct->padfRowReal;
+    double  *padfRowImag = psWrkStruct->padfRowImag;
+
+    // Skip sampling over edge of image
+    int jMin = poWK->nFiltInitY, jMax= poWK->nYRadius;
+    if( iSrcY + jMin < 0 )
+        jMin = -iSrcY;
+    if( iSrcY + jMax >= nSrcYSize )
+        jMax = nSrcYSize - iSrcY - 1;
+
+    int iMin = poWK->nFiltInitX, iMax = poWK->nXRadius;
+    if( iSrcX + iMin < 0 )
+        iMin = -iSrcX;
+    if( iSrcX + iMax >= nSrcXSize )
+        iMax = nSrcXSize - iSrcX - 1;
+
+    if( dfXScale < 1.0 )
+    {
+        while( iMin * dfXScale < -3.0 )
+            iMin ++;
+        while( iMax * dfXScale > 3.0 )
+            iMax --;
+        // padfWeightsX computed in GWKResampleCreateWrkStruct
+    }
+    else
+    {
+        while( iMin - dfDeltaX < -3.0 )
+            iMin ++;
+        while( iMax - dfDeltaX > 3.0 )
+            iMax --;
+
+        if( iSrcX != psWrkStruct->iLastSrcX ||
+            dfDeltaX != psWrkStruct->dfLastDeltaX )
+        {
+            // Optimisation of GWKLanczosSinc(i - dfDeltaX) based on the following
+            // trigonometric formulas.
+
+    //sin(GWK_PI * (dfBase + k)) = sin(GWK_PI * dfBase) * cos(GWK_PI * k) + cos(GWK_PI * dfBase) * sin(GWK_PI * k)
+    //sin(GWK_PI * (dfBase + k)) = dfSinPIBase * cos(GWK_PI * k) + dfCosPIBase * sin(GWK_PI * k)
+    //sin(GWK_PI * (dfBase + k)) = dfSinPIBase * cos(GWK_PI * k)
+    //sin(GWK_PI * (dfBase + k)) = dfSinPIBase * (((k % 2) == 0) ? 1 : -1)
+
+    //sin(GWK_PI / dfR * (dfBase + k)) = sin(GWK_PI / dfR * dfBase) * cos(GWK_PI / dfR * k) + cos(GWK_PI / dfR * dfBase) * sin(GWK_PI / dfR * k)
+    //sin(GWK_PI / dfR * (dfBase + k)) = dfSinPIBaseOverR * cos(GWK_PI / dfR * k) + dfCosPIBaseOverR * sin(GWK_PI / dfR * k)
+
+            double dfSinPIDeltaXOver3 = sin((-GWK_PI / 3) * dfDeltaX);
+            double dfSin2PIDeltaXOver3 = dfSinPIDeltaXOver3 * dfSinPIDeltaXOver3;
+            /* ok to use sqrt(1-sin^2) since GWK_PI / 3 * dfDeltaX < PI/2 */
+            double dfCosPIDeltaXOver3 = sqrt(1 - dfSin2PIDeltaXOver3);
+            double dfSinPIDeltaX = (3-4*dfSin2PIDeltaXOver3)*dfSinPIDeltaXOver3;
+            const double dfInvPI2Over3 = 3.0 / (GWK_PI * GWK_PI);
+            double dfInvPI2Over3xSinPIDeltaX = dfInvPI2Over3 * dfSinPIDeltaX;
+            double dfInvPI2Over3xSinPIDeltaXxm0d5SinPIDeltaXOver3 =
+                -0.5 * dfInvPI2Over3xSinPIDeltaX * dfSinPIDeltaXOver3;
+            const double dfSinPIOver3 = 0.8660254037844386;
+            double dfInvPI2Over3xSinPIDeltaXxSinPIOver3xCosPIDeltaXOver3 =
+                dfSinPIOver3 * dfInvPI2Over3xSinPIDeltaX * dfCosPIDeltaXOver3;
+            double padfCst[] = {
+                dfInvPI2Over3xSinPIDeltaX * dfSinPIDeltaXOver3,
+                dfInvPI2Over3xSinPIDeltaXxm0d5SinPIDeltaXOver3 -
+                        dfInvPI2Over3xSinPIDeltaXxSinPIOver3xCosPIDeltaXOver3,
+                dfInvPI2Over3xSinPIDeltaXxm0d5SinPIDeltaXOver3 +
+                        dfInvPI2Over3xSinPIDeltaXxSinPIOver3xCosPIDeltaXOver3 };
+
+            for (int i = iMin; i <= iMax; ++i )
+            {
+                const double dfX = i - dfDeltaX;
+                if (dfX == 0.0)
+                    padfWeightsX[i-poWK->nFiltInitX] = 1.0;
+                else
+                    padfWeightsX[i-poWK->nFiltInitX] =
+                                            padfCst[(i + 3) % 3] / (dfX * dfX);
+                //CPLAssert(fabs(padfWeightsX[i-poWK->nFiltInitX] - GWKLanczosSinc(dfX, 3.0)) < 1e-10);
+            }
+
+            psWrkStruct->iLastSrcX = iSrcX;
+            psWrkStruct->dfLastDeltaX = dfDeltaX;
+        }
+    }
+
+    if( dfYScale < 1.0 )
+    {
+        while( jMin * dfYScale < -3.0 )
+            jMin ++;
+        while( jMax * dfYScale > 3.0 )
+            jMax --;
+        // padfWeightsY computed in GWKResampleCreateWrkStruct
+    }
+    else
+    {
+        while( jMin - dfDeltaY < -3.0 )
+            jMin ++;
+        while( jMax - dfDeltaY > 3.0 )
+            jMax --;
+
+        if( iSrcY != psWrkStruct->iLastSrcY ||
+            dfDeltaY != psWrkStruct->dfLastDeltaY )
+        {
+            double dfSinPIDeltaYOver3 = sin((-GWK_PI / 3) * dfDeltaY);
+            double dfSin2PIDeltaYOver3 = dfSinPIDeltaYOver3 * dfSinPIDeltaYOver3;
+            /* ok to use sqrt(1-sin^2) since GWK_PI / 3 * dfDeltaY < PI/2 */
+            double dfCosPIDeltaYOver3 = sqrt(1 - dfSin2PIDeltaYOver3);
+            double dfSinPIDeltaY = (3-4*dfSin2PIDeltaYOver3)*dfSinPIDeltaYOver3;
+            const double dfInvPI2Over3 = 3.0 / (GWK_PI * GWK_PI);
+            double dfInvPI2Over3xSinPIDeltaY = dfInvPI2Over3 * dfSinPIDeltaY;
+            double dfInvPI2Over3xSinPIDeltaYxm0d5SinPIDeltaYOver3 =
+                -0.5 * dfInvPI2Over3xSinPIDeltaY * dfSinPIDeltaYOver3;
+            const double dfSinPIOver3 = 0.8660254037844386;
+            double dfInvPI2Over3xSinPIDeltaYxSinPIOver3xCosPIDeltaYOver3 =
+                dfSinPIOver3 * dfInvPI2Over3xSinPIDeltaY * dfCosPIDeltaYOver3;
+            double padfCst[] = {
+                dfInvPI2Over3xSinPIDeltaY * dfSinPIDeltaYOver3,
+                dfInvPI2Over3xSinPIDeltaYxm0d5SinPIDeltaYOver3 -
+                        dfInvPI2Over3xSinPIDeltaYxSinPIOver3xCosPIDeltaYOver3,
+                dfInvPI2Over3xSinPIDeltaYxm0d5SinPIDeltaYOver3 +
+                        dfInvPI2Over3xSinPIDeltaYxSinPIOver3xCosPIDeltaYOver3 };
+
+            for ( int j = jMin; j <= jMax; ++j )
+            {
+                const double dfY = j - dfDeltaY;
+                if (dfY == 0.0)
+                    padfWeightsY[j-poWK->nFiltInitY] = 1.0;
+                else
+                    padfWeightsY[j-poWK->nFiltInitY] =
+                                            padfCst[(j + 3) % 3] / (dfY * dfY);
+                //CPLAssert(fabs(padfWeightsY[j-poWK->nFiltInitY] - GWKLanczosSinc(dfY, 3.0)) < 1e-10);
+            }
+
+            psWrkStruct->iLastSrcY = iSrcY;
+            psWrkStruct->dfLastDeltaY = dfDeltaY;
+        }
+    }
+
+    int iRowOffset = iSrcOffset + (jMin - 1) * nSrcXSize + iMin;
+
+    // If we have no density information, we can simply compute the
+    // accumulated weight.
+    if( padfRowDensity == NULL )
+    {
+        double dfRowAccWeight = 0.0;
+        for (int i = iMin; i <= iMax; ++i )
+        {
+            dfRowAccWeight += padfWeightsX[i-poWK->nFiltInitX];
+        }
+        double dfColAccWeight = 0.0;
+        for ( int j = jMin; j <= jMax; ++j )
+        {
+            dfColAccWeight += padfWeightsY[j-poWK->nFiltInitY];
+        }
+        dfAccumulatorWeight = dfRowAccWeight * dfColAccWeight;
+
+        if( !GDALDataTypeIsComplex(poWK->eWorkingDataType) )
+            padfRowImag = NULL;
+    }
+
+    // Loop over pixel rows in the kernel
+    for ( int j = jMin; j <= jMax; ++j )
+    {
+        double  dfWeight1;
+
+        iRowOffset += nSrcXSize;
+
+        // Get pixel values
+        // We can potentially read extra elements after the "normal" end of the source arrays,
+        // but the contract of papabySrcImage[iBand], papanBandSrcValid[iBand],
+        // panUnifiedSrcValid and pafUnifiedSrcDensity is to have WARP_EXTRA_ELTS
+        // reserved at their end.
+        if ( !GWKGetPixelRow( poWK, iBand, iRowOffset, (iMax-iMin+2)/2,
+                              padfRowDensity, padfRowReal, padfRowImag ) )
+            continue;
+
+        dfWeight1 = padfWeightsY[j-poWK->nFiltInitY];
+
+        // Iterate over pixels in row
+        if ( padfRowDensity != NULL )
+        {
+            for (int i = iMin; i <= iMax; ++i )
+            {
+                double dfWeight2;
+
+                // Skip sampling if pixel has zero density
+                if ( padfRowDensity[i - iMin] < 0.000000001 )
+                    continue;
+
+                //  Use a cached set of weights for this row
+                dfWeight2 = dfWeight1 * padfWeightsX[i- poWK->nFiltInitX];
+
+                // Accumulate!
+                dfAccumulatorReal += padfRowReal[i - iMin] * dfWeight2;
+                dfAccumulatorImag += padfRowImag[i - iMin] * dfWeight2;
+                dfAccumulatorDensity += padfRowDensity[i - iMin] * dfWeight2;
+                dfAccumulatorWeight += dfWeight2;
+            }
+        }
+        else if( padfRowImag == NULL )
+        {
+            double dfRowAccReal = 0.0;
+            for (int i = iMin; i <= iMax; ++i )
+            {
+                double dfWeight2 = padfWeightsX[i- poWK->nFiltInitX];
+
+                // Accumulate!
+                dfRowAccReal += padfRowReal[i - iMin] * dfWeight2;
+            }
+
+            dfAccumulatorReal += dfRowAccReal * dfWeight1;
+        }
+        else
+        {
+            double dfRowAccReal = 0.0;
+            double dfRowAccImag = 0.0;
+            for (int i = iMin; i <= iMax; ++i )
+            {
+                double dfWeight2 = padfWeightsX[i- poWK->nFiltInitX];
+
+                // Accumulate!
+                dfRowAccReal += padfRowReal[i - iMin] * dfWeight2;
+                dfRowAccImag += padfRowImag[i - iMin] * dfWeight2;
+            }
+
+            dfAccumulatorReal += dfRowAccReal * dfWeight1;
+            dfAccumulatorImag += dfRowAccImag * dfWeight1;
+        }
+    }
+
+    if ( dfAccumulatorWeight < 0.000001 ||
+         (padfRowDensity != NULL && dfAccumulatorDensity < 0.000001) )
+    {
+        *pdfDensity = 0.0;
+        return FALSE;
+    }
+
+    // Calculate the output taking into account weighting
+    if ( dfAccumulatorWeight < 0.99999 || dfAccumulatorWeight > 1.00001 )
+    {
+        const double dfInvAcc = 1.0 / dfAccumulatorWeight;
+        *pdfReal = dfAccumulatorReal * dfInvAcc;
+        *pdfImag = dfAccumulatorImag * dfInvAcc;
+        if( padfRowDensity != NULL )
+            *pdfDensity = dfAccumulatorDensity * dfInvAcc;
+        else
+            *pdfDensity = 1.0;
+    }
+    else
+    {
+        *pdfReal = dfAccumulatorReal;
+        *pdfImag = dfAccumulatorImag;
+        if( padfRowDensity != NULL )
+            *pdfDensity = dfAccumulatorDensity;
+        else
+            *pdfDensity = 1.0;
     }
     
     return TRUE;
@@ -3026,9 +3427,7 @@ static void GWKGeneralCaseThread( void* pData)
 /* -------------------------------------------------------------------- */
             double  dfDensity = 1.0;
 
-            if( poWK->pafUnifiedSrcDensity != NULL 
-                && iSrcX >= 0 && iSrcY >= 0 
-                && iSrcX < nSrcXSize && iSrcY < nSrcYSize )
+            if( poWK->pafUnifiedSrcDensity != NULL )
             {
                 dfDensity = poWK->pafUnifiedSrcDensity[iSrcOffset];
                 if( dfDensity < 0.00001 )
@@ -3036,8 +3435,6 @@ static void GWKGeneralCaseThread( void* pData)
             }
 
             if( poWK->panUnifiedSrcValid != NULL
-                && iSrcX >= 0 && iSrcY >= 0 
-                && iSrcX < nSrcXSize && iSrcY < nSrcYSize 
                 && !(poWK->panUnifiedSrcValid[iSrcOffset>>5]
                      & (0x01 << (iSrcOffset & 0x1f))) )
                 continue;
@@ -3083,7 +3480,7 @@ static void GWKGeneralCaseThread( void* pData)
                 else if ( poWK->eResample == GRA_CubicSpline
                           || poWK->eResample == GRA_Lanczos )
                 {
-                    GWKResample( poWK, iBand, 
+                    psWrkStruct->pfnGWKResample( poWK, iBand, 
                                  padfX[iDstX]-poWK->nSrcXOff,
                                  padfY[iDstX]-poWK->nSrcYOff,
                                  &dfBandDensity, 

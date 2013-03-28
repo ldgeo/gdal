@@ -34,8 +34,6 @@
 #include "cpl_string.h"
 #include "cpl_vsi.h"
 
-#include <zlib.h>
-
 #ifdef HAVE_EXPAT
 #include "ogr_expat.h"
 #endif
@@ -282,6 +280,11 @@ end_error:
 #define OSMHEADER_IDX_WRITING_PROGRAM       16
 #define OSMHEADER_IDX_SOURCE                17
 
+/* Ignored */
+#define OSMHEADER_IDX_OSMOSIS_REPLICATION_TIMESTAMP  32
+#define OSMHEADER_IDX_OSMOSIS_REPLICATION_SEQ_NUMBER 33
+#define OSMHEADER_IDX_OSMOSIS_REPLICATION_BASE_URL   34
+
 static
 int ReadOSMHeader(GByte* pabyData, GByte* pabyDataLimit,
                   OSMContext* psCtxt)
@@ -331,6 +334,22 @@ int ReadOSMHeader(GByte* pabyData, GByte* pabyDataLimit,
         {
             READ_TEXT(pabyData, pabyDataLimit, pszTxt);
             /* printf("OSMHEADER_IDX_SOURCE = %s\n", pszTxt); */
+            VSIFree(pszTxt);
+        }
+        else if (nKey == MAKE_KEY(OSMHEADER_IDX_OSMOSIS_REPLICATION_TIMESTAMP, WT_VARINT))
+        {
+            GIntBig nVal;
+            READ_VARINT64(pabyData, pabyDataLimit, nVal);
+        }
+        else if (nKey == MAKE_KEY(OSMHEADER_IDX_OSMOSIS_REPLICATION_SEQ_NUMBER, WT_VARINT))
+        {
+            GIntBig nVal;
+            READ_VARINT64(pabyData, pabyDataLimit, nVal);
+        }
+        else if (nKey == MAKE_KEY(OSMHEADER_IDX_OSMOSIS_REPLICATION_BASE_URL, WT_DATA))
+        {
+            READ_TEXT(pabyData, pabyDataLimit, pszTxt);
+            /* printf("OSMHEADER_IDX_OSMOSIS_REPLICATION_BASE_URL = %s\n", pszTxt); */
             VSIFree(pszTxt);
         }
         else
@@ -1509,8 +1528,8 @@ int ReadBlob(GByte* pabyData, unsigned int nDataSize, BlobType eType,
 
             if (nUncompressedSize != 0)
             {
-                int nStatus;
-                z_stream sStream;
+                void* pOut;
+
                 if (nUncompressedSize > psCtxt->nUncompressedAllocated)
                 {
                     GByte* pabyUncompressedNew;
@@ -1526,21 +1545,10 @@ int ReadBlob(GByte* pabyData, unsigned int nDataSize, BlobType eType,
 
                 /* printf("inflate %d -> %d\n", nZlibCompressedSize, nUncompressedSize); */
 
-                sStream.next_in   = pabyData;
-                sStream.avail_in  = nZlibCompressedSize;
-                sStream.zalloc = NULL;
-                sStream.zfree = NULL;
-                sStream.opaque = NULL;
-                if( inflateInit(&sStream) != Z_OK )
-                    GOTO_END_ERROR;
-
-                sStream.next_out  = psCtxt->pabyUncompressed;
-                sStream.avail_out = nUncompressedSize;
-                nStatus = inflate(&sStream, Z_FINISH);
-
-                inflateEnd(&sStream);
-
-                if (nStatus != Z_OK && nStatus != Z_STREAM_END)
+                pOut = CPLZLibInflate( pabyData, nZlibCompressedSize,
+                                       psCtxt->pabyUncompressed, nUncompressedSize,
+                                       NULL );
+                if( pOut == NULL )
                     GOTO_END_ERROR;
 
                 if (eType == BLOB_OSMHEADER)
@@ -2179,10 +2187,18 @@ OSMContext* OSM_Open( const char* pszFilename,
     memset(psCtxt, 0, sizeof(OSMContext));
     psCtxt->bPBF = bPBF;
     psCtxt->fp = fp;
-    psCtxt->pfnNotifyNodes = pfnNotifyNodes ? pfnNotifyNodes : EmptyNotifyNodesFunc;
-    psCtxt->pfnNotifyWay = pfnNotifyWay ? pfnNotifyWay : EmptyNotifyWayFunc;
-    psCtxt->pfnNotifyRelation = pfnNotifyRelation ? pfnNotifyRelation : EmptyNotifyRelationFunc;
-    psCtxt->pfnNotifyBounds = pfnNotifyBounds ? pfnNotifyBounds : EmptyNotifyBoundsFunc;
+    psCtxt->pfnNotifyNodes = pfnNotifyNodes;
+    if( pfnNotifyNodes == NULL )
+        psCtxt->pfnNotifyNodes = EmptyNotifyNodesFunc;
+    psCtxt->pfnNotifyWay = pfnNotifyWay;
+    if( pfnNotifyWay == NULL )
+        psCtxt->pfnNotifyWay = EmptyNotifyWayFunc;
+    psCtxt->pfnNotifyRelation = pfnNotifyRelation;
+    if( pfnNotifyRelation == NULL )
+        psCtxt->pfnNotifyRelation = EmptyNotifyRelationFunc;
+    psCtxt->pfnNotifyBounds = pfnNotifyBounds;
+    if( pfnNotifyBounds == NULL )
+        psCtxt->pfnNotifyBounds = EmptyNotifyBoundsFunc;
     psCtxt->user_data = user_data;
 
     if( bPBF )

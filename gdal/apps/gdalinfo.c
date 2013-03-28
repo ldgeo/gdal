@@ -33,6 +33,7 @@
 #include "cpl_string.h"
 #include "cpl_conv.h"
 #include "cpl_multiproc.h"
+#include "commonutils.h"
 
 CPL_CVSID("$Id$");
 
@@ -46,18 +47,26 @@ GDALInfoReportCorner( GDALDatasetH hDataset,
 /*                               Usage()                                */
 /************************************************************************/
 
-void Usage()
+void Usage(const char* pszErrorMsg)
 
 {
     printf( "Usage: gdalinfo [--help-general] [-mm] [-stats] [-hist] [-nogcp] [-nomd]\n"
             "                [-norat] [-noct] [-nofl] [-checksum] [-proj4] [-mdd domain]*\n"
             "                [-sd subdataset] datasetname\n" );
+
+    if( pszErrorMsg != NULL )
+        fprintf(stderr, "\nFAILURE: %s\n", pszErrorMsg);
+
     exit( 1 );
 }
 
 /************************************************************************/
 /*                                main()                                */
 /************************************************************************/
+
+#define CHECK_HAS_ENOUGH_ADDITIONAL_ARGS(nExtraArg) \
+    do { if (i + nExtraArg >= argc) \
+        Usage(CPLSPrintf("%s option requires %d argument(s)", argv[i], nExtraArg)); } while(0)
 
 int main( int argc, char ** argv ) 
 
@@ -90,19 +99,7 @@ int main( int argc, char ** argv )
         exit(1);
     }
 
-
-    /* Must process GDAL_SKIP before GDALAllRegister(), but we can't call */
-    /* GDALGeneralCmdLineProcessor before it needs the drivers to be registered */
-    /* for the --format or --formats options */
-    for( i = 1; i < argc; i++ )
-    {
-        if( EQUAL(argv[i],"--config") && i + 2 < argc && EQUAL(argv[i + 1], "GDAL_SKIP") )
-        {
-            CPLSetConfigOption( argv[i+1], argv[i+2] );
-
-            i += 2;
-        }
-    }
+    EarlySetConfigOptions(argc, argv);
 
     GDALAllRegister();
 
@@ -121,6 +118,8 @@ int main( int argc, char ** argv )
                    argv[0], GDAL_RELEASE_NAME, GDALVersionInfo("RELEASE_NAME"));
             return 0;
         }
+        else if( EQUAL(argv[i],"--help") )
+            Usage(NULL);
         else if( EQUAL(argv[i], "-mm") )
             bComputeMinMax = TRUE;
         else if( EQUAL(argv[i], "-hist") )
@@ -149,23 +148,29 @@ int main( int argc, char ** argv )
             bShowRAT = FALSE;
         else if( EQUAL(argv[i], "-noct") )
             bShowColorTable = FALSE;
-        else if( EQUAL(argv[i], "-mdd") && i < argc-1 )
+        else if( EQUAL(argv[i], "-mdd") )
+        {
+            CHECK_HAS_ENOUGH_ADDITIONAL_ARGS(1);
             papszExtraMDDomains = CSLAddString( papszExtraMDDomains,
                                                 argv[++i] );
+        }
         else if( EQUAL(argv[i], "-nofl") )
             bShowFileList = FALSE;
-        else if( EQUAL(argv[i], "-sd") && i < argc-1 )
+        else if( EQUAL(argv[i], "-sd") )
+        {
+            CHECK_HAS_ENOUGH_ADDITIONAL_ARGS(1);
             nSubdataset = atoi(argv[++i]);
+        }
         else if( argv[i][0] == '-' )
-            Usage();
+            Usage(CPLSPrintf("Unkown option name '%s'", argv[i]));
         else if( pszFilename == NULL )
             pszFilename = argv[i];
         else
-            Usage();
+            Usage("Too many command options.");
     }
 
     if( pszFilename == NULL )
-        Usage();
+        Usage("No datasource specified.");
 
 /* -------------------------------------------------------------------- */
 /*      Open dataset.                                                   */

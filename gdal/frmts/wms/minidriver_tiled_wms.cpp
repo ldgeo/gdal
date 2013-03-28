@@ -236,7 +236,7 @@ static void FindChangePattern( char *cdata,char **substs, char **keys, CPLString
                 // But is the match for the key position?
                 char *found_key=NULL;
                 const char *found_value=CPLParseNameValue(substs[sub_number],&found_key);
-                if (EQUAL(found_key,key))
+                if (found_key!=NULL && EQUAL(found_key,key))
                 {  // Should exits in the request
                     if (std::string::npos==ret.find(key))
                     {
@@ -546,7 +546,7 @@ CPLErr GDALWMSMiniDriver_TiledWMS::Initialize(CPLXMLNode *config)
                 CPLString request;
                 FindChangePattern(Pattern->psChild->pszValue,substs,keys,request);
 
-                char **papszTokens=CSLTokenizeString2(request,"&",NULL);
+                char **papszTokens=CSLTokenizeString2(request,"&",0);
 
                 const char* pszWIDTH = CSLFetchNameValue(papszTokens,"WIDTH");
                 const char* pszHEIGHT = CSLFetchNameValue(papszTokens,"HEIGHT");

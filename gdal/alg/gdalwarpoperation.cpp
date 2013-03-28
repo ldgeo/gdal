@@ -414,6 +414,8 @@ CPLErr GDALWarpOperation::Initialize( const GDALWarpOptions *psNewOptions )
         WipeOptions();
 
     psOptions = GDALCloneWarpOptions( psNewOptions );
+    psOptions->papszWarpOptions = CSLAddNameValue(psOptions->papszWarpOptions,
+        "EXTRA_ELTS", CPLSPrintf("%d", WARP_EXTRA_ELTS));
 
 /* -------------------------------------------------------------------- */
 /*      Default band mapping if missing.                                */
@@ -607,6 +609,27 @@ void GDALDestroyWarpOperation( GDALWarpOperationH hOperation )
 /************************************************************************/
 /*                         ChunkAndWarpImage()                          */
 /************************************************************************/
+ 
+ struct WarpChunk { 
+    int dx, dy, dsx, dsy; 
+    int sx, sy, ssx, ssy; 
+}; 
+ 
+static int OrderWarpChunk(const void* _a, const void *_b)
+{ 
+    const WarpChunk* a = (const WarpChunk* )_a;
+    const WarpChunk* b = (const WarpChunk* )_b;
+    if (a->dy < b->dy)
+        return -1; 
+    else if (a->dy > b->dy)
+        return 1; 
+    else if (a->dx < b->dx)
+        return -1; 
+    else if (a->dx > b->dx)
+        return 1; 
+    else
+        return 0; 
+}
 
 /**
  * \fn CPLErr GDALWarpOperation::ChunkAndWarpImage(
@@ -630,27 +653,6 @@ void GDALDestroyWarpOperation( GDALWarpOperationH hOperation )
  *
  * @return CE_None on success or CE_Failure if an error occurs.
  */
- 
- struct WarpChunk { 
-    int dx, dy, dsx, dsy; 
-    int sx, sy, ssx, ssy; 
-}; 
- 
-static int OrderWarpChunk(const void* _a, const void *_b)
-{ 
-    const WarpChunk* a = (const WarpChunk* )_a;
-    const WarpChunk* b = (const WarpChunk* )_b;
-    if (a->dy < b->dy)
-        return -1; 
-    else if (a->dy > b->dy)
-        return 1; 
-    else if (a->dx < b->dx)
-        return -1; 
-    else if (a->dx > b->dx)
-        return 1; 
-    else
-        return 0; 
-} 
 
 CPLErr GDALWarpOperation::ChunkAndWarpImage( 
     int nDstXOff, int nDstYOff,  int nDstXSize, int nDstYSize )
@@ -1487,7 +1489,7 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
 
     if (nSrcXSize != 0 && nSrcYSize != 0 &&
         (nSrcXSize > INT_MAX / nSrcYSize ||
-         nSrcXSize * nSrcYSize > INT_MAX / (nWordSize * psOptions->nBandCount)))
+         nSrcXSize * nSrcYSize > INT_MAX / (nWordSize * psOptions->nBandCount) - WARP_EXTRA_ELTS))
     {
         CPLError( CE_Failure, CPLE_AppDefined,
                   "Integer overflow : nSrcXSize=%d, nSrcYSize=%d",
@@ -1498,19 +1500,19 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
     oWK.papabySrcImage = (GByte **) 
         CPLCalloc(sizeof(GByte*),psOptions->nBandCount);
     oWK.papabySrcImage[0] = (GByte *)
-        VSIMalloc( nWordSize * nSrcXSize * nSrcYSize * psOptions->nBandCount );
+        VSIMalloc( nWordSize * (nSrcXSize * nSrcYSize + WARP_EXTRA_ELTS) * psOptions->nBandCount );
 
     if( nSrcXSize != 0 && nSrcYSize != 0 && oWK.papabySrcImage[0] == NULL )
     {
         CPLError( CE_Failure, CPLE_OutOfMemory, 
                   "Failed to allocate %d byte source buffer.",
-                  nWordSize * nSrcXSize * nSrcYSize * psOptions->nBandCount );
+                  nWordSize * (nSrcXSize * nSrcYSize + WARP_EXTRA_ELTS) * psOptions->nBandCount );
         eErr = CE_Failure;
     }
         
     for( i = 0; i < psOptions->nBandCount && eErr == CE_None; i++ )
         oWK.papabySrcImage[i] = ((GByte *) oWK.papabySrcImage[0])
-            + nWordSize * nSrcXSize * nSrcYSize * i;
+            + nWordSize * (nSrcXSize * nSrcYSize + WARP_EXTRA_ELTS) * i;
 
     if( eErr == CE_None && nSrcXSize > 0 && nSrcYSize > 0 )
         eErr = 
@@ -1519,7 +1521,7 @@ CPLErr GDALWarpOperation::WarpRegionToBuffer(
                                  oWK.papabySrcImage[0], nSrcXSize, nSrcYSize,
                                  psOptions->eWorkingDataType, 
                                  psOptions->nBandCount, psOptions->panSrcBands,
-                                 0, 0, 0 );
+                                 0, 0, nWordSize * (nSrcXSize * nSrcYSize + WARP_EXTRA_ELTS) );
 
     ReportTiming( "Input buffer read" );
 
@@ -1884,6 +1886,7 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
 {
     void **ppMask;
     int  nXSize, nYSize, nBitsPerPixel, nDefault;
+    int  nExtraElts = 0;
 
 /* -------------------------------------------------------------------- */
 /*      Get particulars of mask to be updated.                          */
@@ -1895,6 +1898,7 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
                 CPLCalloc( sizeof(void*),poKernel->nBands);
                 
         ppMask = (void **) &(poKernel->papanBandSrcValid[iBand]);
+        nExtraElts = WARP_EXTRA_ELTS;
         nXSize = poKernel->nSrcXSize;
         nYSize = poKernel->nSrcYSize;
         nBitsPerPixel = 1;
@@ -1903,6 +1907,7 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
     else if( EQUAL(pszType,"UnifiedSrcValid") )
     {
         ppMask = (void **) &(poKernel->panUnifiedSrcValid);
+        nExtraElts = WARP_EXTRA_ELTS;
         nXSize = poKernel->nSrcXSize;
         nYSize = poKernel->nSrcYSize;
         nBitsPerPixel = 1;
@@ -1911,6 +1916,7 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
     else if( EQUAL(pszType,"UnifiedSrcDensity") )
     {
         ppMask = (void **) &(poKernel->pafUnifiedSrcDensity);
+        nExtraElts = WARP_EXTRA_ELTS;
         nXSize = poKernel->nSrcXSize;
         nYSize = poKernel->nSrcYSize;
         nBitsPerPixel = 32;
@@ -1948,9 +1954,9 @@ CPLErr GDALWarpOperation::CreateKernelMask( GDALWarpKernel *poKernel,
         int nBytes;
 
         if( nBitsPerPixel == 32 )
-            nBytes = nXSize * nYSize * 4;
+            nBytes = (nXSize * nYSize + nExtraElts) * 4;
         else
-            nBytes = (nXSize * nYSize + 31) / 8;
+            nBytes = (nXSize * nYSize + nExtraElts + 31) / 8;
 
         *ppMask = VSIMalloc( nBytes );
 

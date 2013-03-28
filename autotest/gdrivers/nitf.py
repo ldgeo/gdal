@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 ###############################################################################
 # $Id$
 #
@@ -70,7 +71,7 @@ def nitf_3():
 ###############################################################################
 # Test direction creation of an NITF file.
 
-def nitf_create(creation_options):
+def nitf_create(creation_options, set_inverted_color_interp = True):
 
     drv = gdal.GetDriverByName( 'NITF' )
 
@@ -83,6 +84,15 @@ def nitf_create(creation_options):
                      creation_options )
     ds.SetGeoTransform( (100, 0.1, 0.0, 30.0, 0.0, -0.1 ) )
 
+    if set_inverted_color_interp:
+        ds.GetRasterBand( 1 ).SetRasterColorInterpretation( gdal.GCI_BlueBand )
+        ds.GetRasterBand( 2 ).SetRasterColorInterpretation( gdal.GCI_GreenBand )
+        ds.GetRasterBand( 3 ).SetRasterColorInterpretation( gdal.GCI_RedBand )
+    else:
+        ds.GetRasterBand( 1 ).SetRasterColorInterpretation( gdal.GCI_RedBand )
+        ds.GetRasterBand( 2 ).SetRasterColorInterpretation( gdal.GCI_GreenBand )
+        ds.GetRasterBand( 3 ).SetRasterColorInterpretation( gdal.GCI_BlueBand )
+
     my_list = list(range(200)) + list(range(20,220)) + list(range(30,230))
     raw_data = array.array('h',my_list).tostring()
 
@@ -90,10 +100,6 @@ def nitf_create(creation_options):
         ds.WriteRaster( 0, line, 200, 1, raw_data,
                         buf_type = gdal.GDT_Int16,
                         band_list = [1,2,3] )
-
-    ds.GetRasterBand( 1 ).SetRasterColorInterpretation( gdal.GCI_BlueBand )
-    ds.GetRasterBand( 2 ).SetRasterColorInterpretation( gdal.GCI_GreenBand )
-    ds.GetRasterBand( 3 ).SetRasterColorInterpretation( gdal.GCI_RedBand )
 
     ds = None
 
@@ -110,7 +116,7 @@ def nitf_4():
 ###############################################################################
 # Verify created file
 
-def nitf_check_created_file(checksum1, checksum2, checksum3):
+def nitf_check_created_file(checksum1, checksum2, checksum3, set_inverted_color_interp = True):
     ds = gdal.Open( 'tmp/test_create.ntf' )
     
     chksum = ds.GetRasterBand(1).Checksum()
@@ -145,17 +151,18 @@ def nitf_check_created_file(checksum1, checksum2, checksum3):
         gdaltest.post_reason( 'geotransform differs from expected' )
         return 'fail'
 
-    if ds.GetRasterBand(1).GetRasterColorInterpretation() != gdal.GCI_BlueBand:
-        gdaltest.post_reason( 'Got wrong color interpretation.' )
-        return 'fail'
+    if set_inverted_color_interp:
+        if ds.GetRasterBand(1).GetRasterColorInterpretation() != gdal.GCI_BlueBand:
+            gdaltest.post_reason( 'Got wrong color interpretation.' )
+            return 'fail'
 
-    if ds.GetRasterBand(2).GetRasterColorInterpretation() !=gdal.GCI_GreenBand:
-        gdaltest.post_reason( 'Got wrong color interpretation.' )
-        return 'fail'
+        if ds.GetRasterBand(2).GetRasterColorInterpretation() !=gdal.GCI_GreenBand:
+            gdaltest.post_reason( 'Got wrong color interpretation.' )
+            return 'fail'
 
-    if ds.GetRasterBand(3).GetRasterColorInterpretation() != gdal.GCI_RedBand:
-        gdaltest.post_reason( 'Got wrong color interpretation.' )
-        return 'fail'
+        if ds.GetRasterBand(3).GetRasterColorInterpretation() != gdal.GCI_RedBand:
+            gdaltest.post_reason( 'Got wrong color interpretation.' )
+            return 'fail'
 
     ds = None
 
@@ -236,7 +243,7 @@ def nitf_9():
     (exp_mean, exp_stddev) = (65.9532, 46.9026375565)
     (mean, stddev) = ds.GetRasterBand(1).ComputeBandStats()
     
-    if abs(exp_mean-mean) > 0.01 or abs(exp_stddev-stddev) > 0.01:
+    if abs(exp_mean-mean) > 0.1 or abs(exp_stddev-stddev) > 0.1:
         print(mean, stddev)
         gdaltest.post_reason( 'did not get expected mean or standard dev.' )
         return 'fail'
@@ -253,8 +260,15 @@ def nitf_9():
 # tricky.  Verify this is working. 
 
 def nitf_10():
+    
+    src_ds = gdal.Open('tmp/nitf9.ntf')
+    expected_cs = src_ds.GetRasterBand(2).Checksum()
+    src_ds = None
+    if expected_cs != 22296 and expected_cs != 22259:
+        gdaltest.post_reason( 'fail' )
+        return 'fail'
 
-    tst = gdaltest.GDALTest( 'NITF', '../tmp/nitf9.ntf', 2, 22296 )
+    tst = gdaltest.GDALTest( 'NITF', '../tmp/nitf9.ntf', 2, expected_cs )
     return tst.testCreateCopy()
 
 ###############################################################################
@@ -541,8 +555,8 @@ def nitf_28_jp2ecw():
     # Deregister other potential conflicting JPEG2000 drivers
     gdaltest.deregister_all_jpeg2000_drivers_but('JP2ECW')
 
-    if nitf_create([ 'ICORDS=G', 'IC=C8', 'TARGET=75' ]) == 'success':
-        ret = nitf_check_created_file(32398, 42502, 38882)
+    if nitf_create([ 'ICORDS=G', 'IC=C8', 'TARGET=75' ], set_inverted_color_interp = False) == 'success':
+        ret = nitf_check_created_file(32398, 42502, 38882, set_inverted_color_interp = False)
         if ret == 'success':
             gdaltest.nitf_28_jp2ecw_is_ok = True
     else:
@@ -572,7 +586,7 @@ def nitf_28_jp2mrsid():
     # Deregister other potential conflicting JPEG2000 drivers
     gdaltest.deregister_all_jpeg2000_drivers_but('JP2MrSID')
 
-    ret = nitf_check_created_file(32398, 42502, 38882)
+    ret = nitf_check_created_file(32398, 42502, 38882, set_inverted_color_interp = False)
 
     gdaltest.reregister_all_jpeg2000_drivers()
 
@@ -601,7 +615,7 @@ def nitf_28_jp2kak():
     # Deregister other potential conflicting JPEG2000 drivers
     gdaltest.deregister_all_jpeg2000_drivers_but('JP2KAK')
 
-    ret = nitf_check_created_file(32398, 42502, 38882)
+    ret = nitf_check_created_file(32398, 42502, 38882, set_inverted_color_interp = False)
 
     gdaltest.reregister_all_jpeg2000_drivers()
 
@@ -831,7 +845,7 @@ def nitf_36():
     (exp_mean, exp_stddev) = (65.4208, 47.254550335)
     (minval, maxval, mean, stddev) = ds.GetRasterBand(1).GetStatistics(False, True)
 
-    if abs(exp_mean-mean) > 0.01 or abs(exp_stddev-stddev) > 0.01:
+    if abs(exp_mean-mean) > 0.1 or abs(exp_stddev-stddev) > 0.1:
         print(mean, stddev)
         gdaltest.post_reason( 'did not get expected mean or standard dev.' )
         return 'fail'
@@ -851,7 +865,7 @@ def nitf_36():
         return 'fail'
 
     (minval, maxval, mean, stddev) = ds.GetRasterBand(1).GetStatistics(False, False)
-    if abs(exp_mean-mean) > 0.01 or abs(exp_stddev-stddev) > 0.01:
+    if abs(exp_mean-mean) > 0.1 or abs(exp_stddev-stddev) > 0.1:
         print(mean, stddev)
         gdaltest.post_reason( 'Should have statistics at that point.' )
         return 'fail'
@@ -941,7 +955,7 @@ def nitf_39():
     (exp_mean, exp_stddev) = (65.4208, 47.254550335)
     (mean, stddev) = ds.GetRasterBand(1).ComputeBandStats()
     
-    if abs(exp_mean-mean) > 0.01 or abs(exp_stddev-stddev) > 0.01:
+    if abs(exp_mean-mean) > 0.1 or abs(exp_stddev-stddev) > 0.1:
         print(mean, stddev)
         gdaltest.post_reason( 'did not get expected mean or standard dev.' )
         return 'fail'
@@ -1987,6 +2001,41 @@ def nitf_69():
     return 'success'
 
 ###############################################################################
+# Create and read a JPEG encoded NITF file with NITF dimensions != JPEG dimensions
+
+def nitf_70():
+
+    src_ds = gdal.Open( 'data/rgbsmall.tif' )
+
+    ds = gdal.GetDriverByName('NITF').CreateCopy( 'tmp/nitf_70.ntf', src_ds,
+                                                  options = ['IC=C3', 'BLOCKXSIZE=64', 'BLOCKYSIZE=64'] )
+    ds = None
+
+    # For comparison
+    ds = gdal.GetDriverByName('GTiff').CreateCopy( 'tmp/nitf_70.tif', src_ds,
+                                                  options = ['COMPRESS=JPEG', 'PHOTOMETRIC=YCBCR', 'TILED=YES', 'BLOCKXSIZE=64', 'BLOCKYSIZE=64'] )
+    ds = None
+    src_ds = None
+
+    ds = gdal.Open( 'tmp/nitf_70.ntf' )
+    cs = ds.GetRasterBand(1).Checksum()
+    ds = None
+    
+    ds = gdal.Open( 'tmp/nitf_70.tif' )
+    cs_ref = ds.GetRasterBand(1).Checksum()
+    ds = None
+    
+    gdal.GetDriverByName('NITF').Delete( 'tmp/nitf_70.ntf' )
+    gdal.GetDriverByName('GTiff').Delete( 'tmp/nitf_70.tif' )
+
+    if cs != cs_ref:
+        print(cs)
+        print(cs_ref)
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
 # Test NITF21_CGM_ANNO_Uncompressed_unmasked.ntf for bug #1313 and #1714
 
 def nitf_online_1():
@@ -2999,6 +3048,7 @@ gdaltest_list = [
     nitf_67,
     nitf_68,
     nitf_69,
+    nitf_70,
     nitf_online_1,
     nitf_online_2,
     nitf_online_3,

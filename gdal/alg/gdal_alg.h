@@ -120,6 +120,7 @@ typedef struct {
     GDALTransformerFunc pfnTransform;
     void (*pfnCleanup)( void * );
     CPLXMLNode *(*pfnSerialize)( void * );
+    /* TODO GDAL 2.0 : add a void* (*pfnClone) (void *) member */
 } GDALTransformerInfo;
 
 void CPL_DLL GDALDestroyTransformer( void *pTransformerArg );
@@ -185,6 +186,8 @@ void CPL_DLL GDALDestroyTPSTransformer( void *pTransformArg );
 int CPL_DLL GDALTPSTransform( 
     void *pTransformArg, int bDstToSrc, int nPointCount,
     double *x, double *y, double *z, int *panSuccess );
+
+char CPL_DLL ** RPCInfoToMD( GDALRPCInfo *psRPCInfo );
 
 /* RPC based transformer ... src is pixel/line/elev, dst is long/lat/elev */
 

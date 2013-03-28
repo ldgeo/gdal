@@ -27,6 +27,13 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
+/* WARNING: VERY IMPORTANT NOTE: This file MUST not be directly compiled as */
+/* a standalone object. It must be included from ogrsqlitevirtualogr.cpp */
+/* (actually from ogrsqlitesqlfunctions.cpp) */
+#ifndef COMPILATION_ALLOWED
+#error See comment in file
+#endif
+
 /* This code originates from pcre.c from the sqlite3-pcre extension */
 /* from http://laltromondo.dynalias.net/~iki/informatica/soft/sqlite3-pcre/ */
 /* whose header is : */
@@ -159,6 +166,7 @@ void OGRSQLiteREGEXPFunction(sqlite3_context *ctx, int argc, sqlite3_value **arg
 /*                        OGRSQLiteRegisterRegExpFunction()             */
 /************************************************************************/
 
+static
 void* OGRSQLiteRegisterRegExpFunction(sqlite3* hDB)
 {
 #ifdef HAVE_PCRE
@@ -192,6 +200,7 @@ void* OGRSQLiteRegisterRegExpFunction(sqlite3* hDB)
 /*                         OGRSQLiteFreeRegExpCache()                   */
 /************************************************************************/
 
+static
 void OGRSQLiteFreeRegExpCache(void* hRegExpCache)
 {
 #ifdef HAVE_PCRE

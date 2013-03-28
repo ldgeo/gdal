@@ -28,6 +28,8 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
+#include "cpl_vsi.h"
+
 #include <ctype.h>
 
 #include "ogr_geometry.h"
@@ -507,7 +509,8 @@ void OGRFree( void * pMemory )
  *        exit( -argc );
  *
  * @param nArgc number of values in the argument list.
- * @param Pointer to the argument list array (will be updated in place). 
+ * @param ppapszArgv pointer to the argument list array (will be updated in place). 
+ * @param nOptions unused.
  *
  * @return updated nArgc argument count.  Return of 0 requests terminate 
  * without error, return of -1 requests exit with error code.
@@ -597,6 +600,7 @@ int OGRGeneralCmdLineProcessor( int nArgc, char ***ppapszArgv, int nOptions )
             for( i = 0; papszFiles[i] != NULL; i++ )
             {
                 CPLString osOldPath, osNewPath;
+                VSIStatBufL sStatBuf;
                 
                 if( EQUAL(papszFiles[i],".") || EQUAL(papszFiles[i],"..") )
                     continue;
@@ -604,6 +608,14 @@ int OGRGeneralCmdLineProcessor( int nArgc, char ***ppapszArgv, int nOptions )
                 osOldPath = CPLFormFilename( papszArgv[iArg+1], 
                                              papszFiles[i], NULL );
                 osNewPath.Printf( "/vsimem/%s", papszFiles[i] );
+
+                if( VSIStatL( osOldPath, &sStatBuf ) != 0
+                    || VSI_ISDIR( sStatBuf.st_mode ) )
+                {
+                    CPLDebug( "VSI", "Skipping preload of %s.", 
+                              osOldPath.c_str() );
+                    continue;
+                }
 
                 CPLDebug( "VSI", "Preloading %s to %s.", 
                           osOldPath.c_str(), osNewPath.c_str() );
@@ -818,7 +830,14 @@ int OGRParseDate( const char *pszInput, OGRField *psField, int nOptions )
     
     if( strstr(pszInput,"-") != NULL || strstr(pszInput,"/") != NULL )
     {
-        psField->Date.Year = (GInt16)atoi(pszInput);
+        int nYear = atoi(pszInput);
+        if( nYear != (GInt16)nYear )
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+                     "Years < -32768 or > 32767 are not supported");
+            return FALSE;
+        }
+        psField->Date.Year = (GInt16)nYear;
         if( psField->Date.Year < 100 && psField->Date.Year >= 30 )
             psField->Date.Year += 1900;
         else if( psField->Date.Year < 30 && psField->Date.Year >= 0 )

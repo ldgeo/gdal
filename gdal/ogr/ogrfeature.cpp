@@ -701,7 +701,7 @@ int OGRFeature::IsFieldSet( int iField ) const
             if( poGeometry == NULL )
                 return FALSE;
 
-            return OGR_G_GetArea((OGRGeometryH)poGeometry) != 0.0;
+            return OGR_G_Area((OGRGeometryH)poGeometry) != 0.0;
 
           default:
             return FALSE;
@@ -887,7 +887,7 @@ int OGRFeature::GetFieldAsInteger( int iField )
         case SPF_OGR_GEOM_AREA:
             if( poGeometry == NULL )
                 return 0;
-            return (int)OGR_G_GetArea((OGRGeometryH)poGeometry);
+            return (int)OGR_G_Area((OGRGeometryH)poGeometry);
 
         default:
             return 0;
@@ -977,7 +977,7 @@ double OGRFeature::GetFieldAsDouble( int iField )
         case SPF_OGR_GEOM_AREA:
             if( poGeometry == NULL )
                 return 0.0;
-            return OGR_G_GetArea((OGRGeometryH)poGeometry);
+            return OGR_G_Area((OGRGeometryH)poGeometry);
 
         default:
             return 0.0;
@@ -1100,7 +1100,7 @@ const char *OGRFeature::GetFieldAsString( int iField )
                 return "";
 
             snprintf( szTempBuffer, TEMP_BUFFER_SIZE, "%.16g", 
-                      OGR_G_GetArea((OGRGeometryH)poGeometry) );
+                      OGR_G_Area((OGRGeometryH)poGeometry) );
             return m_pszTmpFieldValue = CPLStrdup( szTempBuffer );
 
           default:
@@ -1149,7 +1149,7 @@ const char *OGRFeature::GetFieldAsString( int iField )
     else if( poFDefn->GetType() == OFTDateTime )
     {
         snprintf( szTempBuffer, TEMP_BUFFER_SIZE,
-                  "%04d/%02d/%02d %2d:%02d:%02d", 
+                  "%04d/%02d/%02d %02d:%02d:%02d", 
                   pauFields[iField].Date.Year,
                   pauFields[iField].Date.Month,
                   pauFields[iField].Date.Day,
@@ -1945,8 +1945,9 @@ void OGRFeature::SetField( int iField, const char * pszValue )
     }
     else if( poFDefn->GetType() == OFTInteger )
     {
-        pauFields[iField].Integer = strtol(pszValue, &pszLast, 10);
-        if( bWarn && ( !pszLast || *pszLast ) )
+        long nVal = strtol(pszValue, &pszLast, 10);
+        pauFields[iField].Integer = (nVal > INT_MAX) ? INT_MAX : (nVal < INT_MIN) ? INT_MIN : (int) nVal;
+        if( bWarn && (nVal != (long)pauFields[iField].Integer || !pszLast || *pszLast ) )
             CPLError(CE_Warning, CPLE_AppDefined,
                      "Value '%s' of field %s.%s parsed incompletely to integer %d.",
                      pszValue, poDefn->GetName(), poFDefn->GetNameRef(), pauFields[iField].Integer );
@@ -2346,6 +2347,13 @@ void OGRFeature::SetField( int iField, int nYear, int nMonth, int nDay,
         || poFDefn->GetType() == OFTTime 
         || poFDefn->GetType() == OFTDateTime )
     {
+        if( (GInt16)nYear != nYear )
+        {
+            CPLError(CE_Failure, CPLE_NotSupported,
+                     "Years < -32768 or > 32767 are not supported");
+            return;
+        }
+
         pauFields[iField].Date.Year = (GInt16)nYear;
         pauFields[iField].Date.Month = (GByte)nMonth;
         pauFields[iField].Date.Day = (GByte)nDay;

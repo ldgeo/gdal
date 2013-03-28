@@ -198,12 +198,17 @@ class OGRGFTDataSource : public OGRDataSource
     int                 bReadWrite;
 
     int                 bUseHTTPS;
+
     CPLString           osAuth;
-    int                 FetchAuth(const char* pszEmail, const char* pszPassword);
+    CPLString           osAccessToken;
+    CPLString           osRefreshToken;
+    CPLString           osAPIKey;
 
     void                DeleteLayer( const char *pszLayerName );
 
     int                 bMustCleanPersistant;
+
+    static CPLStringList ParseSimpleJson(const char *pszJSon);
 
   public:
                         OGRGFTDataSource();
@@ -231,7 +236,7 @@ class OGRGFTDataSource : public OGRDataSource
                                    const char *pszDialect );
     virtual void       ReleaseResultSet( OGRLayer * poLayer );
 
-    const CPLString&            GetAuth() const { return osAuth; }
+    const CPLString&            GetAccessToken() const { return osAccessToken;}
     const char*                 GetAPIURL() const;
     int                         IsReadWrite() const { return bReadWrite; }
     char**                      AddHTTPOptions(char** papszOptions = NULL);

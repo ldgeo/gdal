@@ -187,7 +187,7 @@ def ogr_wfs_geoserver():
         gdaltest.post_reason('did not get OLCFastFeatureCount')
         return 'fail'
 
-    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=tiger:poi&MAXFEATURES=10')
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=tiger:poi&MAXFEATURES=10&VERSION=1.1.0')
     if ds is None:
         print('server perhaps overloaded')
         return 'skip'
@@ -278,7 +278,7 @@ def ogr_wfs_geoserver_json():
     if gdaltest.geoserver_wfs != True:
         return 'skip'
 
-    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=za:za_points&MAXFEATURES=10&OUTPUTFORMAT=json')
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=za:za_points&MAXFEATURES=10&VERSION=1.1.0&OUTPUTFORMAT=json')
     if ds is None:
         gdaltest.post_reason('did not managed to open WFS datastore')
         return 'fail'
@@ -334,7 +334,7 @@ def ogr_wfs_geoserver_shapezip():
     if gdaltest.geoserver_wfs != True:
         return 'skip'
 
-    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=za:za_points&MAXFEATURES=10&OUTPUTFORMAT=SHAPE-ZIP')
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=za:za_points&MAXFEATURES=10&VERSION=1.1.0&OUTPUTFORMAT=SHAPE-ZIP')
     if ds is None:
         gdaltest.post_reason('did not managed to open WFS datastore')
         return 'fail'
@@ -372,6 +372,83 @@ def ogr_wfs_geoserver_shapezip():
 
     return 'success'
 
+###############################################################################
+# Test WFS paging
+
+def ogr_wfs_geoserver_paging():
+    if gdaltest.wfs_drv is None:
+        return 'skip'
+    if not gdaltest.have_gml_reader:
+        if gdaltest.geoserver_wfs is None:
+            if gdaltest.gdalurlopen('http://demo.opengeo.org/geoserver/wfs') is None:
+                gdaltest.geoserver_wfs = False
+                print('cannot open URL')
+                return 'skip'
+            gdaltest.geoserver_wfs = True
+
+    if gdaltest.geoserver_wfs != True:
+        return 'skip'
+
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=og:bugsites&VERSION=1.1.0')
+    lyr = ds.GetLayer(0)
+    feature_count_ref = lyr.GetFeatureCount()
+    page_size = (int)(feature_count_ref / 3) + 1
+    ds = None
+
+    # Test with WFS 1.0.0
+    gdal.SetConfigOption('OGR_WFS_PAGING_ALLOWED', 'ON')
+    gdal.SetConfigOption('OGR_WFS_PAGE_SIZE', '%d' % page_size)
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=og:bugsites&VERSION=1.0.0')
+    gdal.SetConfigOption('OGR_WFS_PAGING_ALLOWED', None)
+    gdal.SetConfigOption('OGR_WFS_PAGE_SIZE', None)
+    if ds is None:
+        gdaltest.post_reason('did not managed to open WFS datastore')
+        return 'fail'
+
+    lyr = ds.GetLayer(0)
+    feature_count_wfs100 = lyr.GetFeatureCount()
+    ds = None
+
+    if feature_count_wfs100 != feature_count_ref:
+        gdaltest.post_reason('fail')
+        print(feature_count_wfs100)
+        print(feature_count_ref)
+        return 'fail'
+
+    # Test with WFS 1.1.0
+    gdal.SetConfigOption('OGR_WFS_PAGING_ALLOWED', 'ON')
+    gdal.SetConfigOption('OGR_WFS_PAGE_SIZE', '%d' % page_size)
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?TYPENAME=og:bugsites&VERSION=1.1.0')
+    gdal.SetConfigOption('OGR_WFS_PAGING_ALLOWED', None)
+    gdal.SetConfigOption('OGR_WFS_PAGE_SIZE', None)
+    if ds is None:
+        gdaltest.post_reason('did not managed to open WFS datastore')
+        return 'fail'
+
+    lyr = ds.GetLayer(0)
+    feature_count_wfs110 = lyr.GetFeatureCount()
+
+    feature_count_wfs110_at_hand = 0
+    lyr.ResetReading()
+    feat = lyr.GetNextFeature()
+    while feat is not None:
+        feature_count_wfs110_at_hand = feature_count_wfs110_at_hand + 1
+        feat = lyr.GetNextFeature()
+    ds = None
+
+    if feature_count_wfs110 != feature_count_ref:
+        gdaltest.post_reason('fail')
+        print(feature_count_wfs100)
+        print(feature_count_ref)
+        return 'fail'
+
+    if feature_count_wfs110_at_hand != feature_count_ref:
+        gdaltest.post_reason('fail')
+        print(feature_count_wfs110_at_hand)
+        print(feature_count_ref)
+        return 'fail'
+
+    return 'success'
 ###############################################################################
 # Test reading a Deegree WFS server
 
@@ -521,7 +598,7 @@ def ogr_wfs_geoserver_wfst():
     if gdaltest.geoserver_wfs != True:
         return 'skip'
 
-    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs', update = 1)
+    ds = ogr.Open('WFS:http://demo.opengeo.org/geoserver/wfs?VERSION=1.1.0', update = 1)
     if ds is None:
         return 'fail'
 
@@ -532,6 +609,10 @@ def ogr_wfs_geoserver_wfst():
     #feat.SetField('name', 'name_set_by_ogr_wfs_8_test')
     feat.SetField('type', 'type_set_by_ogr_wfs_8_test')
     if lyr.CreateFeature(feat) != 0:
+        # Likely a bug in the current GeoServer version ??
+        if gdal.GetLastErrorMsg().find("No such property 'typeName'") >= 0:
+            return 'skip'
+
         gdaltest.post_reason('cannot create feature')
         return 'fail'
 
@@ -853,7 +934,7 @@ def ogr_wfs_deegree_gml321():
         print('cannot open URL')
         return 'skip'
 
-    ds = ogr.Open('WFS:http://deegree3-demo.deegree.org:80/inspire-workspace/services?MAXFEATURES=10')
+    ds = ogr.Open('WFS:http://deegree3-demo.deegree.org:80/inspire-workspace/services?ACCEPTVERSIONS=1.1.0&MAXFEATURES=10')
     if ds is None:
         if gdal.GetLastErrorMsg().find("Unable to determine the subcontroller for request type 'GetCapabilities' and service type 'WFS'") != -1:
             return 'skip'
@@ -940,7 +1021,7 @@ def ogr_wfs_deegree_sortby():
     if not gdaltest.have_gml_reader:
         return 'skip'
 
-    ds = ogr.Open('WFS:http://deegree3-demo.deegree.org:80/utah-workspace/services?MAXFEATURES=10')
+    ds = ogr.Open('WFS:http://deegree3-demo.deegree.org:80/utah-workspace/services?MAXFEATURES=10&VERSION=1.1.0')
     if ds is None:
         if gdaltest.gdalurlopen('http://deegree3-demo.deegree.org:80/utah-workspace/services') is None:
             print('cannot open URL')
@@ -1042,6 +1123,7 @@ gdaltest_list = [
     ogr_wfs_geoserver,
     ogr_wfs_geoserver_json,
     ogr_wfs_geoserver_shapezip,
+    ogr_wfs_geoserver_paging,
     ogr_wfs_deegree,
     ogr_wfs_test_ogrsf,
     ogr_wfs_fake_wfs_server,

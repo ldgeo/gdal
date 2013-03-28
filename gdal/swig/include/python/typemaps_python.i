@@ -745,8 +745,12 @@ CreateTupleFromDoubleArray( int *first, unsigned int size ) {
 %typemap(in) char **options
 {
   /* %typemap(in) char **options */
-  /* Check if is a list */
-  if ( ! PySequence_Check($input)) {
+  /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+  if ( ! PySequence_Check($input) || PyUnicode_Check($input)
+%#if PY_VERSION_HEX < 0x03000000
+    || PyString_Check($input)
+%#endif
+    ) {
     PyErr_SetString(PyExc_TypeError,"not a sequence");
     SWIG_fail;
   }
@@ -1168,6 +1172,43 @@ static PyObject *XMLTreeToPyList( CPLXMLNode *psTree )
   
         CPLFree(psProgressInfo);
 
+}
+
+
+%typemap(in) ( CPLErrorHandler pfnErrorHandler = NULL, void* user_data = NULL ) 
+{
+    /* %typemap(in) (CPLErrorHandler pfnErrorHandler = NULL, void* user_data = NULL) */
+    int alloc = 0;
+    char* pszCallbackName = NULL;
+    $2 = NULL;
+    if( SWIG_IsOK(SWIG_AsCharPtrAndSize($input, &pszCallbackName, NULL, &alloc)) )
+    {
+        if( pszCallbackName == NULL || EQUAL(pszCallbackName,"CPLQuietErrorHandler") )
+            $1 = CPLQuietErrorHandler;
+        else if( EQUAL(pszCallbackName,"CPLDefaultErrorHandler") )
+            $1 = CPLDefaultErrorHandler;
+        else if( EQUAL(pszCallbackName,"CPLLoggingErrorHandler") )
+            $1 = CPLLoggingErrorHandler;
+        else
+        {
+            if (alloc == SWIG_NEWOBJ) delete[] pszCallbackName;
+            PyErr_SetString( PyExc_RuntimeError, "Unhandled value for passed string" );
+            SWIG_fail;
+        }
+
+        if (alloc == SWIG_NEWOBJ) delete[] pszCallbackName;
+    }
+    else if (!PyCallable_Check($input))
+    {
+        PyErr_SetString( PyExc_RuntimeError, 
+                         "Object given is not a String or a Python function" );
+        SWIG_fail;
+    }
+    else
+    {
+        $1 = PyCPLErrorHandler;
+        $2 = $input;
+    }
 }
 
 

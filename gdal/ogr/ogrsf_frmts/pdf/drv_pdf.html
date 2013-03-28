@@ -8,7 +8,7 @@
 
 <h1>PDF - Geospatial PDF</h1>
 
-(GDAL/OGR >= 2.0.0)<p>
+(GDAL/OGR &gt;= 1.10.0)<p>
 
 This driver can rean and write geospatial PDF with vector features.<p>
 
@@ -43,21 +43,32 @@ The supported attributes for each tool are summed up in the following table :<p>
 <tr><td>BRUSH</td><td>foreground color</td><td>BRUSH(fc:#0000FF)</td></tr>
 <tr><td>LABEL</td><td>text (limited to ASCII strings), foreground color, size, x and y offsets, and angle</td><td>LABEL(c:#000000,t:"Hello World!",s:5)</td></tr>
 <tr><td>SYMBOL</td><td>id (ogr-sym-0 to ogr-sym-9, and filenames for raster symbols), color and size</td>
-<td>SYMBOL(c:#00FF00,id:"ogr-sym-3",s:10)<br>SYMBOL(c:#000000,id:"a_symbol.png")</td></tr>
+<td>SYMBOL(c:#00FF00,id:"ogr-sym-3",s:10)<br>SYMBOL(c:#00000080,id:"a_symbol.png")</td></tr>
 </table>
 <p>
 
-Alpha values are supported for colors. If not specified, for BRUSH, it is set at 50% opaque.<p>
+Alpha values are supported for colors to control the opacity. If not specified, for BRUSH, it is set at 50% opaque.<p>
+
+For SYMBOL with a bitmap name, only the alpha value of the color specified with 'c' is taken into account.<p>
 
 <h2>Dataset creation options</h2>
 
 <ul>
+
+<li><p><b>STREAM_COMPRESS=[NONE/DEFLATE]</b>:
+Set the compression to use for stream objects. DEFLATE is the default.</p></li>
 
 <li><p><b>DPI=value</b>:
 Set the DPI to use. Default to 72.</p></li>
 
 <li><p><b>EXTRA_STREAM=content</b>: A PDF content stream to draw after the vector content, typically to add some text. It may refer
 the /FTimesRoman and /FTimesBold fonts.</p></li>
+
+<li><p><b>EXTRA_IMAGES=image_file_name,x,y,scale[,link=some_url] (possibly repeated)</b>: A list of (ungeoreferenced) images to insert into
+the page as extra content. This is usefull to insert logos, legends, etc...
+x and y are in user units from the lower left corner of the page, and the anchor point is the lower left pixel of the image.
+scale is a magnifying ratio (use 1 if unsure). If link=some_url is specified, the image will be selectable and its selection
+will cause a web browser to be opened on the specified URL.</p></li>
 
 <li><p><b>EXTRA_LAYER_NAME=name</b>: Name for layer where the extra content specified with EXTRA_CONTENT_STREAM is placed.</p></li>
 
@@ -79,11 +90,28 @@ in the "Model Tree" will be labelled from their value for the "ID" field.
 If not specified, sequential generic labels will be used ("feature1", "feature2", etc... ).</li>
 
 <li><p><b>OGR_DISPLAY_LAYER_NAMES=names</b> : Comma separated list of names to display for the OGR layers in the "Model Tree".
-This option is useful to provide custom names, instead of sequential generic labels ("layer1", "layer2", etc...) that are used
-when this option is not specified.
+This option is useful to provide custom names, instead of OGR layer name that are used when this option is not specified.
 When specified, the number of names should be the same as the number of OGR layers written (and in the order they are written). </li>
 
 <li><p><b>OGR_WRITE_ATTRIBUTES=YES/NO</b> : Whether to write attributes of OGR features. Defaults to YES</li>
+
+<li><p><b>OGR_LINK_FIELD=name</b> : Name of the field (matching the name of a field from the OGR layer definition)
+to use to cause clicks on OGR features to open a web browser on the URL specified by the field value.</p></li>
+
+<li><p><b>OFF_LAYERS=name (possibly repeated)</b>: Comma separated list of layer names that should be initially hidden.
+By default, all layers are visible. The layer names can come from EXTRA_LAYER_NAME and OGR_DISPLAY_LAYER_NAMES.</p></li>
+
+<li><p><b>EXCLUSIVE_LAYERS=name (possibly repeated)</b>:
+Comma separated list of layer names, such that only one of those layers can be visible at a time.
+This is the behaviour of radio-buttons in a graphical user interface.
+ he layer names can come from EXTRA_LAYER_NAME and OGR_DISPLAY_LAYER_NAMES.
+</p></li>
+
+<li><p><b>JAVASCRIPT=script</b>: Javascript content to run at document opening. See
+<a href="http://partners.adobe.com/public/developer/en/acrobat/sdk/AcroJS.pdf">Acrobat(R) JavaScript Scripting Reference</a>.</p></li>
+
+<li><p><b>JAVASCRIPT_FILE=script_filename</b>: Name of Javascript file to embed and run at document opening. See
+<a href="http://partners.adobe.com/public/developer/en/acrobat/sdk/AcroJS.pdf">Acrobat(R) JavaScript Scripting Reference</a>.</p></li>
 
 </ul>
 

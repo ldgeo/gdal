@@ -2853,6 +2853,7 @@ using namespace std;
 #include "cpl_port.h"
 #include "cpl_string.h"
 #include "cpl_multiproc.h"
+#include "cpl_http.h"
 
 #include "gdal.h"
 #include "gdal_priv.h"
@@ -3256,7 +3257,8 @@ typedef char retStringAndCPLFree;
     CPLDebug( msg_class, "%s", message );
   }
 
-  CPLErr PushErrorHandler( char const * pszCallbackName = NULL ) {
+  CPLErr SetErrorHandler( char const * pszCallbackName = NULL )
+  {
     CPLErrorHandler pfnHandler = NULL;
     if( pszCallbackName == NULL || EQUAL(pszCallbackName,"CPLQuietErrorHandler") )
       pfnHandler = CPLQuietErrorHandler;
@@ -3268,11 +3270,10 @@ typedef char retStringAndCPLFree;
     if ( pfnHandler == NULL )
       return CE_Fatal;
 
-    CPLPushErrorHandler( pfnHandler );
+    CPLSetErrorHandler( pfnHandler );
 
     return CE_None;
   }
-
 
 
 SWIGINTERN swig_type_info*
@@ -3365,6 +3366,27 @@ SWIG_AsCharPtrAndSize(PyObject *obj, char** cptr, size_t* psize, int *alloc)
 
 
 
+
+
+void CPL_STDCALL PyCPLErrorHandler(CPLErr eErrClass, int err_no, const char* pszErrorMsg)
+{
+    void* user_data = CPLGetErrorHandlerUserData();
+    PyObject *psArgs;
+
+    psArgs = Py_BuildValue("(iis)", eErrClass, err_no, pszErrorMsg );
+    PyEval_CallObject( (PyObject*)user_data, psArgs);
+    Py_XDECREF(psArgs);
+}
+
+
+  CPLErr PushErrorHandler( CPLErrorHandler pfnErrorHandler = NULL, void* user_data = NULL )
+  {
+    if( pfnErrorHandler == NULL )
+        CPLPushErrorHandler(CPLQuietErrorHandler);
+    else
+        CPLPushErrorHandlerEx(pfnErrorHandler, user_data);
+    return CE_None;
+  }
 
 
   void Error( CPLErr msg_class = CE_Failure, int err_code = 0, const char* msg = "error" ) {
@@ -4079,6 +4101,7 @@ SWIGINTERN GDALAsyncReaderShadow *GDALDatasetShadow_BeginAsyncReader(GDALDataset
 
   }
 SWIGINTERN void GDALDatasetShadow_EndAsyncReader(GDALDatasetShadow *self,GDALAsyncReaderShadow *ario){
+    if( ario == NULL ) return;
     GDALAsyncReaderH hReader = AsyncReaderWrapperGetReader(ario);
     if (hReader == NULL)
     {
@@ -5295,7 +5318,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_0(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_SetErrorHandler(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   char *arg1 = (char *) NULL ;
   int res1 ;
@@ -5304,11 +5327,11 @@ SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_0(PyObject *SWIGUNUSEDPARM(sel
   PyObject * obj0 = 0 ;
   CPLErr result;
   
-  if (!PyArg_ParseTuple(args,(char *)"|O:PushErrorHandler",&obj0)) SWIG_fail;
+  if (!PyArg_ParseTuple(args,(char *)"|O:SetErrorHandler",&obj0)) SWIG_fail;
   if (obj0) {
     res1 = SWIG_AsCharPtrAndSize(obj0, &buf1, NULL, &alloc1);
     if (!SWIG_IsOK(res1)) {
-      SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "PushErrorHandler" "', argument " "1"" of type '" "char const *""'");
+      SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "SetErrorHandler" "', argument " "1"" of type '" "char const *""'");
     }
     arg1 = reinterpret_cast< char * >(buf1);
   }
@@ -5316,7 +5339,7 @@ SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_0(PyObject *SWIGUNUSEDPARM(sel
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    result = (CPLErr)PushErrorHandler((char const *)arg1);
+    result = (CPLErr)SetErrorHandler((char const *)arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -5339,6 +5362,79 @@ SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_0(PyObject *SWIGUNUSEDPARM(sel
   return resultobj;
 fail:
   if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
+  return NULL;
+}
+
+
+SWIGINTERN PyObject *_wrap_PushErrorHandler(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  CPLErrorHandler arg1 = (CPLErrorHandler) NULL ;
+  void *arg2 = (void *) NULL ;
+  PyObject * obj0 = 0 ;
+  CPLErr result;
+  
+  if (!PyArg_ParseTuple(args,(char *)"|O:PushErrorHandler",&obj0)) SWIG_fail;
+  if (obj0) {
+    {
+      /* %typemap(in) (CPLErrorHandler pfnErrorHandler = NULL, void* user_data = NULL) */
+      int alloc = 0;
+      char* pszCallbackName = NULL;
+      arg2 = NULL;
+      if( SWIG_IsOK(SWIG_AsCharPtrAndSize(obj0, &pszCallbackName, NULL, &alloc)) )
+      {
+        if( pszCallbackName == NULL || EQUAL(pszCallbackName,"CPLQuietErrorHandler") )
+        arg1 = CPLQuietErrorHandler;
+        else if( EQUAL(pszCallbackName,"CPLDefaultErrorHandler") )
+        arg1 = CPLDefaultErrorHandler;
+        else if( EQUAL(pszCallbackName,"CPLLoggingErrorHandler") )
+        arg1 = CPLLoggingErrorHandler;
+        else
+        {
+          if (alloc == SWIG_NEWOBJ) delete[] pszCallbackName;
+          PyErr_SetString( PyExc_RuntimeError, "Unhandled value for passed string" );
+          SWIG_fail;
+        }
+        
+        if (alloc == SWIG_NEWOBJ) delete[] pszCallbackName;
+      }
+      else if (!PyCallable_Check(obj0))
+      {
+        PyErr_SetString( PyExc_RuntimeError, 
+          "Object given is not a String or a Python function" );
+        SWIG_fail;
+      }
+      else
+      {
+        arg1 = PyCPLErrorHandler;
+        arg2 = obj0;
+      }
+    }
+  }
+  {
+    if ( bUseExceptions ) {
+      CPLErrorReset();
+    }
+    result = (CPLErr)PushErrorHandler(arg1,arg2);
+    if ( bUseExceptions ) {
+      CPLErr eclass = CPLGetLastErrorType();
+      if ( eclass == CE_Failure || eclass == CE_Fatal ) {
+        SWIG_exception( SWIG_RuntimeError, CPLGetLastErrorMsg() );
+      }
+    }
+  }
+  resultobj = SWIG_From_int(static_cast< int >(result));
+  {
+    /* %typemap(ret) CPLErr */
+    if ( bUseExceptions == 0 ) {
+      /* We're not using exceptions.  And no error has occurred */
+      if ( resultobj == 0 ) {
+        /* No other return values set so return ErrorCode */
+        resultobj = PyInt_FromLong(result);
+      }
+    }
+  }
+  return resultobj;
+fail:
   return NULL;
 }
 
@@ -5402,32 +5498,26 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_1(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_GOA2GetAuthorizationURL(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
-  CPLErrorHandler arg1 ;
-  void *argp1 ;
-  int res1 = 0 ;
+  char *arg1 = (char *) 0 ;
+  int res1 ;
+  char *buf1 = 0 ;
+  int alloc1 = 0 ;
   PyObject * obj0 = 0 ;
+  retStringAndCPLFree *result = 0 ;
   
-  if (!PyArg_ParseTuple(args,(char *)"O:PushErrorHandler",&obj0)) SWIG_fail;
-  {
-    res1 = SWIG_ConvertPtr(obj0, &argp1, SWIGTYPE_p_CPLErrorHandler,  0  | 0);
-    if (!SWIG_IsOK(res1)) {
-      SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "PushErrorHandler" "', argument " "1"" of type '" "CPLErrorHandler""'"); 
-    }  
-    if (!argp1) {
-      SWIG_exception_fail(SWIG_ValueError, "invalid null reference " "in method '" "PushErrorHandler" "', argument " "1"" of type '" "CPLErrorHandler""'");
-    } else {
-      CPLErrorHandler * temp = reinterpret_cast< CPLErrorHandler * >(argp1);
-      arg1 = *temp;
-      if (SWIG_IsNewObj(res1)) delete temp;
-    }
+  if (!PyArg_ParseTuple(args,(char *)"O:GOA2GetAuthorizationURL",&obj0)) SWIG_fail;
+  res1 = SWIG_AsCharPtrAndSize(obj0, &buf1, NULL, &alloc1);
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "GOA2GetAuthorizationURL" "', argument " "1"" of type '" "char const *""'");
   }
+  arg1 = reinterpret_cast< char * >(buf1);
   {
     if ( bUseExceptions ) {
       CPLErrorReset();
     }
-    CPLPushErrorHandler(arg1);
+    result = (retStringAndCPLFree *)GOA2GetAuthorizationURL((char const *)arg1);
     if ( bUseExceptions ) {
       CPLErr eclass = CPLGetLastErrorType();
       if ( eclass == CE_Failure || eclass == CE_Fatal ) {
@@ -5435,48 +5525,128 @@ SWIGINTERN PyObject *_wrap_PushErrorHandler__SWIG_1(PyObject *SWIGUNUSEDPARM(sel
       }
     }
   }
-  resultobj = SWIG_Py_Void();
+  {
+    /* %typemap(out) (retStringAndCPLFree*) */
+    if(result)
+    {
+      resultobj = GDALPythonObjectFromCStr( (const char *)result);
+      CPLFree(result);
+    }
+  }
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
   return resultobj;
 fail:
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
   return NULL;
 }
 
 
-SWIGINTERN PyObject *_wrap_PushErrorHandler(PyObject *self, PyObject *args) {
-  int argc;
-  PyObject *argv[2];
-  int ii;
+SWIGINTERN PyObject *_wrap_GOA2GetRefreshToken(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  char *arg1 = (char *) 0 ;
+  char *arg2 = (char *) 0 ;
+  int res1 ;
+  char *buf1 = 0 ;
+  int alloc1 = 0 ;
+  int res2 ;
+  char *buf2 = 0 ;
+  int alloc2 = 0 ;
+  PyObject * obj0 = 0 ;
+  PyObject * obj1 = 0 ;
+  retStringAndCPLFree *result = 0 ;
   
-  if (!PyTuple_Check(args)) SWIG_fail;
-  argc = (int)PyObject_Length(args);
-  for (ii = 0; (ii < argc) && (ii < 1); ii++) {
-    argv[ii] = PyTuple_GET_ITEM(args,ii);
+  if (!PyArg_ParseTuple(args,(char *)"OO:GOA2GetRefreshToken",&obj0,&obj1)) SWIG_fail;
+  res1 = SWIG_AsCharPtrAndSize(obj0, &buf1, NULL, &alloc1);
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "GOA2GetRefreshToken" "', argument " "1"" of type '" "char const *""'");
   }
-  if ((argc >= 0) && (argc <= 1)) {
-    int _v;
-    if (argc <= 0) {
-      return _wrap_PushErrorHandler__SWIG_0(self, args);
+  arg1 = reinterpret_cast< char * >(buf1);
+  res2 = SWIG_AsCharPtrAndSize(obj1, &buf2, NULL, &alloc2);
+  if (!SWIG_IsOK(res2)) {
+    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "GOA2GetRefreshToken" "', argument " "2"" of type '" "char const *""'");
+  }
+  arg2 = reinterpret_cast< char * >(buf2);
+  {
+    if ( bUseExceptions ) {
+      CPLErrorReset();
     }
-    int res = SWIG_AsCharPtrAndSize(argv[0], 0, NULL, 0);
-    _v = SWIG_CheckState(res);
-    if (_v) {
-      return _wrap_PushErrorHandler__SWIG_0(self, args);
+    result = (retStringAndCPLFree *)GOA2GetRefreshToken((char const *)arg1,(char const *)arg2);
+    if ( bUseExceptions ) {
+      CPLErr eclass = CPLGetLastErrorType();
+      if ( eclass == CE_Failure || eclass == CE_Fatal ) {
+        SWIG_exception( SWIG_RuntimeError, CPLGetLastErrorMsg() );
+      }
     }
   }
-  if (argc == 1) {
-    int _v;
-    int res = SWIG_ConvertPtr(argv[0], 0, SWIGTYPE_p_CPLErrorHandler, 0);
-    _v = SWIG_CheckState(res);
-    if (_v) {
-      return _wrap_PushErrorHandler__SWIG_1(self, args);
+  {
+    /* %typemap(out) (retStringAndCPLFree*) */
+    if(result)
+    {
+      resultobj = GDALPythonObjectFromCStr( (const char *)result);
+      CPLFree(result);
     }
   }
-  
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
+  if (alloc2 == SWIG_NEWOBJ) delete[] buf2;
+  return resultobj;
 fail:
-  SWIG_SetErrorMsg(PyExc_NotImplementedError,"Wrong number of arguments for overloaded function 'PushErrorHandler'.\n"
-    "  Possible C/C++ prototypes are:\n"
-    "    PushErrorHandler(char const *)\n"
-    "    CPLPushErrorHandler(CPLErrorHandler)\n");
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
+  if (alloc2 == SWIG_NEWOBJ) delete[] buf2;
+  return NULL;
+}
+
+
+SWIGINTERN PyObject *_wrap_GOA2GetAccessToken(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  char *arg1 = (char *) 0 ;
+  char *arg2 = (char *) 0 ;
+  int res1 ;
+  char *buf1 = 0 ;
+  int alloc1 = 0 ;
+  int res2 ;
+  char *buf2 = 0 ;
+  int alloc2 = 0 ;
+  PyObject * obj0 = 0 ;
+  PyObject * obj1 = 0 ;
+  retStringAndCPLFree *result = 0 ;
+  
+  if (!PyArg_ParseTuple(args,(char *)"OO:GOA2GetAccessToken",&obj0,&obj1)) SWIG_fail;
+  res1 = SWIG_AsCharPtrAndSize(obj0, &buf1, NULL, &alloc1);
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "GOA2GetAccessToken" "', argument " "1"" of type '" "char const *""'");
+  }
+  arg1 = reinterpret_cast< char * >(buf1);
+  res2 = SWIG_AsCharPtrAndSize(obj1, &buf2, NULL, &alloc2);
+  if (!SWIG_IsOK(res2)) {
+    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "GOA2GetAccessToken" "', argument " "2"" of type '" "char const *""'");
+  }
+  arg2 = reinterpret_cast< char * >(buf2);
+  {
+    if ( bUseExceptions ) {
+      CPLErrorReset();
+    }
+    result = (retStringAndCPLFree *)GOA2GetAccessToken((char const *)arg1,(char const *)arg2);
+    if ( bUseExceptions ) {
+      CPLErr eclass = CPLGetLastErrorType();
+      if ( eclass == CE_Failure || eclass == CE_Fatal ) {
+        SWIG_exception( SWIG_RuntimeError, CPLGetLastErrorMsg() );
+      }
+    }
+  }
+  {
+    /* %typemap(out) (retStringAndCPLFree*) */
+    if(result)
+    {
+      resultobj = GDALPythonObjectFromCStr( (const char *)result);
+      CPLFree(result);
+    }
+  }
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
+  if (alloc2 == SWIG_NEWOBJ) delete[] buf2;
+  return resultobj;
+fail:
+  if (alloc1 == SWIG_NEWOBJ) delete[] buf1;
+  if (alloc2 == SWIG_NEWOBJ) delete[] buf2;
   return NULL;
 }
 
@@ -7849,8 +8019,12 @@ SWIGINTERN PyObject *_wrap_Driver_Create(PyObject *SWIGUNUSEDPARM(self), PyObjec
   if (obj6) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj6)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj6) || PyUnicode_Check(obj6)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj6)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -7988,8 +8162,12 @@ SWIGINTERN PyObject *_wrap_Driver_CreateCopy(PyObject *SWIGUNUSEDPARM(self), PyO
   if (obj4) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj4)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj4) || PyUnicode_Check(obj4)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj4)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -11901,8 +12079,12 @@ SWIGINTERN PyObject *_wrap_Dataset_AddBand(PyObject *SWIGUNUSEDPARM(self), PyObj
   if (obj2) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj2)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj2) || PyUnicode_Check(obj2)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj2)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -12537,8 +12719,12 @@ SWIGINTERN PyObject *_wrap_Dataset_BeginAsyncReader(PyObject *SWIGUNUSEDPARM(sel
   if (obj13) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj13)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj13) || PyUnicode_Check(obj13)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj13)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -13522,8 +13708,12 @@ SWIGINTERN PyObject *_wrap_Band_SetRasterCategoryNames(PyObject *SWIGUNUSEDPARM(
   arg1 = reinterpret_cast< GDALRasterBandShadow * >(argp1);
   {
     /* %typemap(in) char **options */
-    /* Check if is a list */
-    if ( ! PySequence_Check(obj1)) {
+    /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+    if ( ! PySequence_Check(obj1) || PyUnicode_Check(obj1)
+  #if PY_VERSION_HEX < 0x03000000
+      || PyString_Check(obj1)
+  #endif
+      ) {
       PyErr_SetString(PyExc_TypeError,"not a sequence");
       SWIG_fail;
     }
@@ -15695,8 +15885,12 @@ SWIGINTERN PyObject *_wrap_Band_SetCategoryNames(PyObject *SWIGUNUSEDPARM(self),
   arg1 = reinterpret_cast< GDALRasterBandShadow * >(argp1);
   {
     /* %typemap(in) char **options */
-    /* Check if is a list */
-    if ( ! PySequence_Check(obj1)) {
+    /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+    if ( ! PySequence_Check(obj1) || PyUnicode_Check(obj1)
+  #if PY_VERSION_HEX < 0x03000000
+      || PyString_Check(obj1)
+  #endif
+      ) {
       PyErr_SetString(PyExc_TypeError,"not a sequence");
       SWIG_fail;
     }
@@ -17980,8 +18174,12 @@ SWIGINTERN PyObject *_wrap_ComputeProximity(PyObject *SWIGUNUSEDPARM(self), PyOb
   if (obj2) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj2)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj2) || PyUnicode_Check(obj2)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj2)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -18207,8 +18405,12 @@ SWIGINTERN PyObject *_wrap_RasterizeLayer(PyObject *SWIGUNUSEDPARM(self), PyObje
   if (obj6) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj6)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj6) || PyUnicode_Check(obj6)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj6)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -18412,8 +18614,12 @@ SWIGINTERN PyObject *_wrap_Polygonize(PyObject *SWIGUNUSEDPARM(self), PyObject *
   if (obj4) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj4)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj4) || PyUnicode_Check(obj4)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj4)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -18593,8 +18799,12 @@ SWIGINTERN PyObject *_wrap_FillNodata(PyObject *SWIGUNUSEDPARM(self), PyObject *
   if (obj4) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj4)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj4) || PyUnicode_Check(obj4)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj4)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -18780,8 +18990,12 @@ SWIGINTERN PyObject *_wrap_SieveFilter(PyObject *SWIGUNUSEDPARM(self), PyObject 
   if (obj5) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj5)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj5) || PyUnicode_Check(obj5)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj5)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -19489,8 +19703,12 @@ SWIGINTERN PyObject *_wrap_new_Transformer(PyObject *SWIGUNUSEDPARM(self), PyObj
   arg2 = reinterpret_cast< GDALDatasetShadow * >(argp2);
   {
     /* %typemap(in) char **options */
-    /* Check if is a list */
-    if ( ! PySequence_Check(obj2)) {
+    /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+    if ( ! PySequence_Check(obj2) || PyUnicode_Check(obj2)
+  #if PY_VERSION_HEX < 0x03000000
+      || PyString_Check(obj2)
+  #endif
+      ) {
       PyErr_SetString(PyExc_TypeError,"not a sequence");
       SWIG_fail;
     }
@@ -20013,8 +20231,12 @@ SWIGINTERN PyObject *_wrap_Transformer_TransformGeolocations(PyObject *SWIGUNUSE
   if (obj6) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj6)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj6) || PyUnicode_Check(obj6)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj6)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -21106,8 +21328,12 @@ SWIGINTERN PyObject *_wrap_IdentifyDriver(PyObject *SWIGUNUSEDPARM(self), PyObje
   if (obj1) {
     {
       /* %typemap(in) char **options */
-      /* Check if is a list */
-      if ( ! PySequence_Check(obj1)) {
+      /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+      if ( ! PySequence_Check(obj1) || PyUnicode_Check(obj1)
+  #if PY_VERSION_HEX < 0x03000000
+        || PyString_Check(obj1)
+  #endif
+        ) {
         PyErr_SetString(PyExc_TypeError,"not a sequence");
         SWIG_fail;
       }
@@ -21193,8 +21419,12 @@ SWIGINTERN PyObject *_wrap_GeneralCmdLineProcessor(PyObject *SWIGUNUSEDPARM(self
   if (!PyArg_ParseTuple(args,(char *)"O|O:GeneralCmdLineProcessor",&obj0,&obj1)) SWIG_fail;
   {
     /* %typemap(in) char **options */
-    /* Check if is a list */
-    if ( ! PySequence_Check(obj0)) {
+    /* Check if is a list (and reject strings, that are seen as sequence of characters)  */
+    if ( ! PySequence_Check(obj0) || PyUnicode_Check(obj0)
+  #if PY_VERSION_HEX < 0x03000000
+      || PyString_Check(obj0)
+  #endif
+      ) {
       PyErr_SetString(PyExc_TypeError,"not a sequence");
       SWIG_fail;
     }
@@ -21288,11 +21518,12 @@ static PyMethodDef SwigMethods[] = {
 	 { (char *)"DontUseExceptions", _wrap_DontUseExceptions, METH_VARARGS, (char *)"DontUseExceptions()"},
 	 { (char *)"VSIFReadL", _wrap_VSIFReadL, METH_VARARGS, (char *)"VSIFReadL(int nMembSize, int nMembCount, VSILFILE fp) -> int"},
 	 { (char *)"Debug", _wrap_Debug, METH_VARARGS, (char *)"Debug(char msg_class, char message)"},
+	 { (char *)"SetErrorHandler", _wrap_SetErrorHandler, METH_VARARGS, (char *)"SetErrorHandler(char pszCallbackName = None) -> CPLErr"},
+	 { (char *)"PushErrorHandler", _wrap_PushErrorHandler, METH_VARARGS, (char *)"PushErrorHandler(CPLErrorHandler pfnErrorHandler = None) -> CPLErr"},
 	 { (char *)"Error", _wrap_Error, METH_VARARGS, (char *)"Error(CPLErr msg_class = CE_Failure, int err_code = 0, char msg = \"error\")"},
-	 { (char *)"PushErrorHandler", _wrap_PushErrorHandler, METH_VARARGS, (char *)"\n"
-		"PushErrorHandler(char pszCallbackName = None) -> CPLErr\n"
-		"PushErrorHandler(CPLErrorHandler arg0)\n"
-		""},
+	 { (char *)"GOA2GetAuthorizationURL", _wrap_GOA2GetAuthorizationURL, METH_VARARGS, (char *)"GOA2GetAuthorizationURL(char pszScope) -> retStringAndCPLFree"},
+	 { (char *)"GOA2GetRefreshToken", _wrap_GOA2GetRefreshToken, METH_VARARGS, (char *)"GOA2GetRefreshToken(char pszAuthToken, char pszScope) -> retStringAndCPLFree"},
+	 { (char *)"GOA2GetAccessToken", _wrap_GOA2GetAccessToken, METH_VARARGS, (char *)"GOA2GetAccessToken(char pszRefreshToken, char pszScope) -> retStringAndCPLFree"},
 	 { (char *)"PopErrorHandler", _wrap_PopErrorHandler, METH_VARARGS, (char *)"PopErrorHandler()"},
 	 { (char *)"ErrorReset", _wrap_ErrorReset, METH_VARARGS, (char *)"ErrorReset()"},
 	 { (char *)"EscapeString", (PyCFunction) _wrap_EscapeString, METH_VARARGS | METH_KEYWORDS, (char *)"EscapeString(int len, int scheme = CPLES_SQL) -> retStringAndCPLFree"},

@@ -150,9 +150,29 @@ def Debug(*args):
   """Debug(char msg_class, char message)"""
   return _gdal.Debug(*args)
 
+def SetErrorHandler(*args):
+  """SetErrorHandler(char pszCallbackName = None) -> CPLErr"""
+  return _gdal.SetErrorHandler(*args)
+
+def PushErrorHandler(*args):
+  """PushErrorHandler(CPLErrorHandler pfnErrorHandler = None) -> CPLErr"""
+  return _gdal.PushErrorHandler(*args)
+
 def Error(*args):
   """Error(CPLErr msg_class = CE_Failure, int err_code = 0, char msg = "error")"""
   return _gdal.Error(*args)
+
+def GOA2GetAuthorizationURL(*args):
+  """GOA2GetAuthorizationURL(char pszScope) -> retStringAndCPLFree"""
+  return _gdal.GOA2GetAuthorizationURL(*args)
+
+def GOA2GetRefreshToken(*args):
+  """GOA2GetRefreshToken(char pszAuthToken, char pszScope) -> retStringAndCPLFree"""
+  return _gdal.GOA2GetRefreshToken(*args)
+
+def GOA2GetAccessToken(*args):
+  """GOA2GetAccessToken(char pszRefreshToken, char pszScope) -> retStringAndCPLFree"""
+  return _gdal.GOA2GetAccessToken(*args)
 
 def PopErrorHandler(*args):
   """PopErrorHandler()"""
@@ -270,13 +290,6 @@ class StatBuf(_object):
 
 StatBuf_swigregister = _gdal.StatBuf_swigregister
 StatBuf_swigregister(StatBuf)
-
-def PushErrorHandler(*args):
-  """
-    PushErrorHandler(char pszCallbackName = None) -> CPLErr
-    PushErrorHandler(CPLErrorHandler arg0)
-    """
-  return _gdal.PushErrorHandler(*args)
 
 
 def VSIStatL(*args):

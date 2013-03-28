@@ -46,6 +46,8 @@ CPL_C_START
 void	GDALRegister_GRIB(void);
 CPL_C_END
 
+static void *hGRIBMutex = NULL;
+
 /************************************************************************/
 /* ==================================================================== */
 /*				GRIBDataset				*/
@@ -72,7 +74,6 @@ class GRIBDataset : public GDALPamDataset
 		void SetGribMetaData(grib_MetaData* meta);
     VSILFILE	*fp;
     char  *pszProjection;
-		char  *pszDescription;
     OGRCoordinateTransformation *poTransform;
     double adfGeoTransform[6]; // Calculate and store once as GetGeoTransform may be called multiple times
 
@@ -564,8 +565,8 @@ GDALDataset *GRIBDataset::Open( GDALOpenInfo * poOpenInfo )
     int version;
 // grib is not thread safe, make sure not to cause problems
 // for other thread safe formats
-    static void *mutex = 0;
-    CPLMutexHolderD(&mutex);
+
+    CPLMutexHolderD(&hGRIBMutex);
     MemoryDataSource mds (poOpenInfo->pabyHeader, poOpenInfo->nHeaderBytes);
     if (ReadSECT0 (mds, &buff, &buffLen, -1, sect0, &gribLen, &version) < 0) {
         free (buff);
@@ -605,7 +606,9 @@ GDALDataset *GRIBDataset::Open( GDALOpenInfo * poOpenInfo )
         free(errMsg);
 		
 		CPLError( CE_Failure, CPLE_OpenFailed, "Error (%d) opening file %s", errno, poOpenInfo->pszFilename);
+        CPLReleaseMutex(hGRIBMutex); // Release hGRIBMutex otherwise we'll deadlock with GDALDataset own hGRIBMutex
         delete poDS;
+        CPLAcquireMutex(hGRIBMutex, 1000.0);
         return NULL;
 	}
     
@@ -640,7 +643,9 @@ GDALDataset *GRIBDataset::Open( GDALOpenInfo * poOpenInfo )
         CPLError( CE_Failure, CPLE_OpenFailed, 
                   "%s is a grib file, but no raster dataset was successfully identified.",
                   poOpenInfo->pszFilename );
+        CPLReleaseMutex(hGRIBMutex); // Release hGRIBMutex otherwise we'll deadlock with GDALDataset own hGRIBMutex
         delete poDS;
+        CPLAcquireMutex(hGRIBMutex, 1000.0);
         return NULL;
     }
 
@@ -661,7 +666,9 @@ GDALDataset *GRIBDataset::Open( GDALOpenInfo * poOpenInfo )
                 CPLError( CE_Failure, CPLE_OpenFailed, 
                           "%s is a grib file, but no raster dataset was successfully identified.",
                           poOpenInfo->pszFilename );
+                CPLReleaseMutex(hGRIBMutex); // Release hGRIBMutex otherwise we'll deadlock with GDALDataset own hGRIBMutex
                 delete poDS;
+                CPLAcquireMutex(hGRIBMutex, 1000.0);
                 return NULL;
             }
 
@@ -685,12 +692,15 @@ GDALDataset *GRIBDataset::Open( GDALOpenInfo * poOpenInfo )
 /*      Initialize any PAM information.                                 */
 /* -------------------------------------------------------------------- */
     poDS->SetDescription( poOpenInfo->pszFilename );
+    
+    CPLReleaseMutex(hGRIBMutex); // Release hGRIBMutex otherwise we'll deadlock with GDALDataset own hGRIBMutex
     poDS->TryLoadXML();
 
 /* -------------------------------------------------------------------- */
 /*      Check for external overviews.                                   */
 /* -------------------------------------------------------------------- */
     poDS->oOvManager.Initialize( poDS, poOpenInfo->pszFilename, poOpenInfo->papszSiblingFiles );
+    CPLAcquireMutex(hGRIBMutex, 1000.0);
 
     return( poDS );
 }
@@ -863,6 +873,19 @@ void GRIBDataset::SetGribMetaData(grib_MetaData* meta)
 }
 
 /************************************************************************/
+/*                       GDALDeregister_GRIB()                          */
+/************************************************************************/
+
+static void GDALDeregister_GRIB(GDALDriver* )
+{
+    if( hGRIBMutex != NULL )
+    {
+        CPLDestroyMutex(hGRIBMutex);
+        hGRIBMutex = NULL;
+    }
+}
+
+/************************************************************************/
 /*                         GDALRegister_GRIB()                          */
 /************************************************************************/
 
@@ -885,6 +908,7 @@ void GDALRegister_GRIB()
 
         poDriver->pfnOpen = GRIBDataset::Open;
         poDriver->pfnIdentify = GRIBDataset::Identify;
+        poDriver->pfnUnloadDriver = GDALDeregister_GRIB;
 
         GetGDALDriverManager()->RegisterDriver( poDriver );
     }

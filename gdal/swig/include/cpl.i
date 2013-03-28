@@ -50,6 +50,51 @@ typedef char retStringAndCPLFree;
     CPLDebug( msg_class, "%s", message );
   }
 
+  CPLErr SetErrorHandler( char const * pszCallbackName = NULL )
+  {
+    CPLErrorHandler pfnHandler = NULL;
+    if( pszCallbackName == NULL || EQUAL(pszCallbackName,"CPLQuietErrorHandler") )
+      pfnHandler = CPLQuietErrorHandler;
+    else if( EQUAL(pszCallbackName,"CPLDefaultErrorHandler") )
+      pfnHandler = CPLDefaultErrorHandler;
+    else if( EQUAL(pszCallbackName,"CPLLoggingErrorHandler") )
+      pfnHandler = CPLLoggingErrorHandler;
+
+    if ( pfnHandler == NULL )
+      return CE_Fatal;
+
+    CPLSetErrorHandler( pfnHandler );
+
+    return CE_None;
+  }
+%}
+
+#ifdef SWIGPYTHON
+
+%{
+void CPL_STDCALL PyCPLErrorHandler(CPLErr eErrClass, int err_no, const char* pszErrorMsg)
+{
+    void* user_data = CPLGetErrorHandlerUserData();
+    PyObject *psArgs;
+
+    psArgs = Py_BuildValue("(iis)", eErrClass, err_no, pszErrorMsg );
+    PyEval_CallObject( (PyObject*)user_data, psArgs);
+    Py_XDECREF(psArgs);
+}
+%}
+
+%inline %{
+  CPLErr PushErrorHandler( CPLErrorHandler pfnErrorHandler = NULL, void* user_data = NULL )
+  {
+    if( pfnErrorHandler == NULL )
+        CPLPushErrorHandler(CPLQuietErrorHandler);
+    else
+        CPLPushErrorHandlerEx(pfnErrorHandler, user_data);
+    return CE_None;
+  }
+%}
+#else
+%inline %{
   CPLErr PushErrorHandler( char const * pszCallbackName = NULL ) {
     CPLErrorHandler pfnHandler = NULL;
     if( pszCallbackName == NULL || EQUAL(pszCallbackName,"CPLQuietErrorHandler") )
@@ -66,8 +111,8 @@ typedef char retStringAndCPLFree;
 
     return CE_None;
   }
-
 %}
+#endif
 
 #ifdef SWIGJAVA
 %inline%{
@@ -131,7 +176,16 @@ typedef char retStringAndCPLFree;
 %rename (HasThreadSupport) wrapper_HasThreadSupport;
 #endif
 
-#ifndef SWIGJAVA
+retStringAndCPLFree*
+GOA2GetAuthorizationURL( const char *pszScope );
+
+retStringAndCPLFree*
+GOA2GetRefreshToken( const char *pszAuthToken, const char *pszScope );
+
+retStringAndCPLFree*
+GOA2GetAccessToken( const char *pszRefreshToken, const char *pszScope );
+
+#if !defined(SWIGJAVA) && !defined(SWIGPYTHON)
 void CPLPushErrorHandler( CPLErrorHandler );
 #endif
 

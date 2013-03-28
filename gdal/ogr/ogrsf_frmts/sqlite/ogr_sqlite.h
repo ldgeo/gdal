@@ -220,6 +220,8 @@ class OGRSQLiteLayer : public OGRLayer
 
     int                 bUseComprGeom;
 
+    char              **papszCompressedColumns;
+
   public:
                         OGRSQLiteLayer();
     virtual             ~OGRSQLiteLayer();
@@ -255,6 +257,8 @@ class OGRSQLiteLayer : public OGRLayer
 
     static OGRErr       ImportSpatiaLiteGeometry( const GByte *, int,
                                                   OGRGeometry ** );
+    static OGRErr       ImportSpatiaLiteGeometry( const GByte *, int,
+                                                  OGRGeometry **, int *pnSRID );
     static OGRErr       ExportSpatiaLiteGeometry( const OGRGeometry *,
                                                   GInt32, OGRwkbByteOrder,
                                                   int, int, int bUseComprGeom, GByte **, int * );
@@ -285,6 +289,7 @@ class OGRSQLiteTableLayer : public OGRSQLiteLayer
 
     sqlite3_stmt       *hInsertStmt;
     CPLString           osLastInsertStmt;
+
     void                ClearInsertStmt();
 
     void                BuildWhere(void);
@@ -314,6 +319,8 @@ class OGRSQLiteTableLayer : public OGRSQLiteLayer
 
     void                LoadStatistics();
     void                LoadStatisticsSpatialite4DB();
+
+    CPLString           FieldDefnToSQliteFieldDefn( OGRFieldDefn* poFieldDefn );
 
   public:
                         OGRSQLiteTableLayer( OGRSQLiteDataSource * );
@@ -363,6 +370,8 @@ class OGRSQLiteTableLayer : public OGRSQLiteLayer
                                 { bUseComprGeom = bFlag; }
     void                SetDeferedSpatialIndexCreation( int bFlag )
                                 { bDeferedSpatialIndexCreation = bFlag; }
+    void                SetCompressedColumns( const char* pszCompressedColumns );
+
     int                 CreateSpatialIndex();
 
     void                CreateSpatialIndexIfNecessary();
@@ -458,12 +467,16 @@ class OGRSQLiteSelectLayer : public OGRSQLiteLayer
     OGRSQLiteLayer     *GetBaseLayer(size_t& i);
     int                 RebuildSQLWithSpatialClause();
 
+    int                 bAllowResetReadingEvenIfIndexAtZero;
+ 
   public:
                         OGRSQLiteSelectLayer( OGRSQLiteDataSource *, 
                                               CPLString osSQL,
                                               sqlite3_stmt *,
                                               int bUseStatementForGetNextFeature,
                                               int bEmptyLayer );
+
+    virtual void        ResetReading();
 
     virtual OGRFeature *GetNextFeature();
     virtual int         GetFeatureCount( int );
@@ -529,8 +542,6 @@ class OGRSQLiteDataSource : public OGRDataSource
 
     int                 nUndefinedSRID;
 
-    void               *hRegExpCache;
-
     virtual void        DeleteLayer( const char *pszLayer );
 
     const char*         GetSRTEXTColName();
@@ -580,17 +591,18 @@ class OGRSQLiteDataSource : public OGRDataSource
                                    const char *pszTableName,
                                    const char *pszGeometryColumn);
 
-    const char          *GetName() { return pszName; }
-    int                 GetLayerCount() { return nLayers; }
-    OGRLayer            *GetLayer( int );
-    
+    virtual const char *GetName() { return pszName; }
+    virtual int         GetLayerCount() { return nLayers; }
+    virtual OGRLayer   *GetLayer( int );
+    virtual OGRLayer   *GetLayerByName( const char* );
+
     virtual OGRLayer    *CreateLayer( const char *pszLayerName, 
                                       OGRSpatialReference *poSRS, 
                                       OGRwkbGeometryType eType, 
                                       char **papszOptions );
     virtual OGRErr      DeleteLayer(int);
 
-    int                 TestCapability( const char * );
+    virtual int         TestCapability( const char * );
 
     virtual OGRLayer *  ExecuteSQL( const char *pszSQLCommand,
                                     OGRGeometry *poSpatialFilter,
@@ -629,6 +641,8 @@ class OGRSQLiteDataSource : public OGRDataSource
     int                 HasSpatialite4Layout() const { return bSpatialite4Layout; }
 
     int                 GetUndefinedSRID() const { return nUndefinedSRID; }
+
+    void                ReloadLayers();
 };
 
 /************************************************************************/
@@ -667,6 +681,8 @@ int OGRSQLITEStringToDateTimeField( OGRFeature* poFeature, int iField,
 typedef void (*pfnNotifyFileOpenedType)(void* pfnUserData, const char* pszFilename, VSILFILE* fp);
 sqlite3_vfs* OGRSQLiteCreateVFS(pfnNotifyFileOpenedType pfn, void* pfnUserData);
 #endif
+
+void OGRSQLiteRegisterInflateDeflate(sqlite3* hDB);
 
 #endif /* ndef _OGR_SQLITE_H_INCLUDED */
 

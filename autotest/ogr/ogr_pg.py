@@ -69,6 +69,7 @@ def ogr_pg_1():
         gdaltest.pg_connection_string=val
     else:
         gdaltest.pg_connection_string='dbname=autotest'
+    #gdaltest.pg_connection_string='dbname=autotest-postgis1.4'
     #gdaltest.pg_connection_string='dbname=autotest port=5432'
     #gdaltest.pg_connection_string='dbname=autotest-postgis2.0'
     #gdaltest.pg_connection_string='dbname=autotest host=127.0.0.1 port=5433 user=postgres'
@@ -1154,8 +1155,8 @@ def test_val_test_23(layer_defn, feat):
     feat.GetFieldAsString('my_bytea') != '78797A' or \
     feat.GetFieldAsString('my_time') != '12:34:56' or \
     feat.GetFieldAsString('my_date') != '2000/01/01' or \
-    (feat.GetFieldAsString('my_timestamp') != '2000/01/01  0:00:00' and feat.GetFieldAsString('my_timestamp') != '2000/01/01  0:00:00+00') or \
-    feat.GetFieldAsString('my_timestamptz') != '2000/01/01  0:00:00+00' or \
+    (feat.GetFieldAsString('my_timestamp') != '2000/01/01 00:00:00' and feat.GetFieldAsString('my_timestamp') != '2000/01/01 00:00:00+00') or \
+    feat.GetFieldAsString('my_timestamptz') != '2000/01/01 00:00:00+00' or \
     feat.GetFieldAsString('my_chararray') != '(2:a,b)' or \
     feat.GetFieldAsString('my_textarray') != '(2:aa,bb)' or \
     feat.GetFieldAsString('my_varchararray') != '(2:cc,dd)' or \
@@ -2275,14 +2276,14 @@ def ogr_pg_47():
         
     if not gdaltest.pg_has_postgis:
         return 'skip'
-        
-    if gdaltest.pg_ds.GetLayerByName('geography_columns') is None:
-        gdaltest.post_reason('autotest database must be created with PostGIS >= 1.5')
-        return 'skip'
 
     # Create table with geography column
     gdaltest.pg_ds.ExecuteSQL("DELETE FROM spatial_ref_sys")
     gdaltest.pg_ds.ExecuteSQL("""INSERT INTO "spatial_ref_sys" ("srid","auth_name","auth_srid","srtext","proj4text") VALUES (4326,'EPSG',4326,'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.01745329251994328,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]]','+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs ')""")
+
+    if gdaltest.pg_ds.GetLayerByName('geography_columns') is None:
+        gdaltest.post_reason('autotest database must be created with PostGIS >= 1.5')
+        return 'skip'
 
     gdaltest.pg_ds = None
     gdaltest.pg_ds = ogr.Open( 'PG:' + gdaltest.pg_connection_string, update = 1 )
@@ -3029,6 +3030,43 @@ def ogr_pg_62():
     return 'success'
 
 ###############################################################################
+# Test COLUMN_TYPES layer creation option (#4788)
+
+def ogr_pg_63():
+
+    if gdaltest.pg_ds is None:
+        return 'skip'
+
+    # No need to test it in the non PostGIS case
+    if not gdaltest.pg_has_postgis:
+        return 'skip'
+
+    lyr = gdaltest.pg_ds.CreateLayer('ogr_pg_63', options = ['COLUMN_TYPES=foo=int8,bar=numeric(10,5),baz=hstore'])
+    lyr.CreateField(ogr.FieldDefn('foo', ogr.OFTString))
+    lyr.CreateField(ogr.FieldDefn('bar', ogr.OFTString))
+    feat = ogr.Feature(lyr.GetLayerDefn())
+    feat.SetField('foo', '123')
+    lyr.CreateFeature(feat)
+    feat = None
+    ds = None
+
+    ds = ogr.Open('PG:' + gdaltest.pg_connection_string)
+    lyr = ds.GetLayerByName('ogr_pg_63')
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('foo')).GetType() != ogr.OFTInteger:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if lyr.GetLayerDefn().GetFieldDefn(lyr.GetLayerDefn().GetFieldIndex('bar')).GetType() != ogr.OFTReal:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    feat = lyr.GetNextFeature()
+    if feat.GetField('foo') != 123:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success' 
+
+###############################################################################
 # 
 
 def ogr_pg_table_cleanup():
@@ -3067,6 +3105,7 @@ def ogr_pg_table_cleanup():
     gdaltest.pg_ds.ExecuteSQL( 'DELLAYER:ogr_pg_58' )
     gdaltest.pg_ds.ExecuteSQL( 'DELLAYER:ogr_pg_60' )
     gdaltest.pg_ds.ExecuteSQL( 'DELLAYER:ogr_pg_61' )
+    gdaltest.pg_ds.ExecuteSQL( 'DELLAYER:ogr_pg_63' )
     
     # Drop second 'tpoly' from schema 'AutoTest-schema' (do NOT quote names here)
     gdaltest.pg_ds.ExecuteSQL( 'DELLAYER:AutoTest-schema.tpoly' )
@@ -3161,6 +3200,7 @@ gdaltest_list_internal = [
     ogr_pg_60,
     ogr_pg_61,
     ogr_pg_62,
+    ogr_pg_63,
     ogr_pg_cleanup ]
 
 ###############################################################################

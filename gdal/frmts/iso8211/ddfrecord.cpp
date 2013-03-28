@@ -304,7 +304,7 @@ int DDFRecord::ReadHeader()
 /* -------------------------------------------------------------------- */
 /*      Is there anything seemly screwy about this record?              */
 /* -------------------------------------------------------------------- */
-    if(( _recLength < 24 || _recLength > 100000000
+    if(( _recLength <= 24 || _recLength > 100000000
          || _fieldAreaStart < 24 || _fieldAreaStart > 100000 )
        && (_recLength != 0))
     {
@@ -340,7 +340,7 @@ int DDFRecord::ReadHeader()
 /*      we will read extra bytes till we get to it.                     */
 /* -------------------------------------------------------------------- */
         while( pachData[nDataSize-1] != DDF_FIELD_TERMINATOR 
-               && (nDataSize == 0 || pachData[nDataSize-2] != DDF_FIELD_TERMINATOR) )
+               && (nDataSize < 2 || pachData[nDataSize-2] != DDF_FIELD_TERMINATOR) )
         {
             nDataSize++;
             pachData = (char *) CPLRealloc(pachData,nDataSize);
@@ -364,6 +364,13 @@ int DDFRecord::ReadHeader()
         int         nFieldEntryWidth;
       
         nFieldEntryWidth = _sizeFieldLength + _sizeFieldPos + _sizeFieldTag;
+        if( nFieldEntryWidth <= 0 )
+        {
+            CPLError( CE_Failure, CPLE_FileIO, 
+                      "Invalid entry width = %d", nFieldEntryWidth);
+            return FALSE;
+        }
+
         nFieldCount = 0;
         for( i = 0; i < nDataSize; i += nFieldEntryWidth )
         {
@@ -519,7 +526,9 @@ int DDFRecord::ReadHeader()
             int nEntryOffset = (i*nFieldEntryWidth) + _sizeFieldTag;
             int nFieldLength = DDFScanInt(pachData + nEntryOffset,
                                           _sizeFieldLength);
-            char *tmpBuf = (char*)VSIMalloc(nFieldLength);
+            char *tmpBuf = NULL;
+            if( nFieldLength >= 0 )
+                tmpBuf = (char*)VSIMalloc(nFieldLength);
             if( tmpBuf == NULL )
             {
                 CPLError(CE_Failure, CPLE_OutOfMemory,

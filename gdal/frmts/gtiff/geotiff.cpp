@@ -292,6 +292,8 @@ class GTiffDataset : public GDALPamDataset
     int         IsBlockAvailable( int nBlockId );
 
     int         bGeoTIFFInfoChanged;
+    int         bForceUnsetGT;
+    int         bForceUnsetProjection;
     int         bNoDataSet;
     double      dfNoDataValue;
 
@@ -479,6 +481,7 @@ class GTiffRasterBand : public GDALPamRasterBand
     double             dfOffset;
     double             dfScale;
     CPLString          osUnitType;
+    CPLString          osDescription;
 
     CPLErr DirectIO( GDALRWFlag eRWFlag,
                                   int nXOff, int nYOff, int nXSize, int nYSize,
@@ -507,6 +510,9 @@ public:
                                   void * pData, int nBufXSize, int nBufYSize,
                                   GDALDataType eBufType,
                                   int nPixelSpace, int nLineSpace );
+
+    virtual const char *GetDescription() const;
+    virtual void        SetDescription( const char * );
 
     virtual GDALColorInterp GetColorInterpretation();
     virtual GDALColorTable *GetColorTable();
@@ -1382,6 +1388,28 @@ CPLErr GTiffRasterBand::IWriteBlock( int nBlockXOff, int nBlockYOff,
 }
 
 /************************************************************************/
+/*                           SetDescription()                           */
+/************************************************************************/
+
+void GTiffRasterBand::SetDescription( const char *pszDescription )
+
+{
+    if( pszDescription == NULL )
+        pszDescription = "";
+
+    osDescription = pszDescription;
+}
+
+/************************************************************************/
+/*                           GetDescription()                           */
+/************************************************************************/
+
+const char *GTiffRasterBand::GetDescription() const
+{
+    return osDescription;
+}
+
+/************************************************************************/
 /*                             GetOffset()                              */
 /************************************************************************/
 
@@ -1526,7 +1554,7 @@ GDALColorInterp GTiffRasterBand::GetColorInterpretation()
 /*                         GTiffGetAlphaValue()                         */
 /************************************************************************/
 
- /* Note: was EXTRASAMPLE_ASSOCALPHA in GDAL < 2.0 */
+ /* Note: was EXTRASAMPLE_ASSOCALPHA in GDAL < 1.10 */
 #define DEFAULT_ALPHA_TYPE              EXTRASAMPLE_UNASSALPHA
 
 static int GTiffGetAlphaValue(const char* pszValue, int nDefault)
@@ -3015,6 +3043,8 @@ GTiffDataset::GTiffDataset()
     bNeedsRewrite = FALSE;
     bMetadataChanged = FALSE;
     bGeoTIFFInfoChanged = FALSE;
+    bForceUnsetGT = FALSE;
+    bForceUnsetProjection = FALSE;
     bCrystalized = TRUE;
     poColorTable = NULL;
     bNoDataSet = FALSE;
@@ -4255,15 +4285,6 @@ CPLErr GTiffDataset::IBuildOverviews(
     }
 
 /* -------------------------------------------------------------------- */
-/*      Initialize progress counter.                                    */
-/* -------------------------------------------------------------------- */
-    if( !pfnProgress( 0.0, NULL, pProgressData ) )
-    {
-        CPLError( CE_Failure, CPLE_UserInterrupt, "User terminated" );
-        return CE_Failure;
-    }
-
-/* -------------------------------------------------------------------- */
 /*      If zero overviews were requested, we need to clear all          */
 /*      existing overviews.                                             */
 /* -------------------------------------------------------------------- */
@@ -4275,6 +4296,60 @@ CPLErr GTiffDataset::IBuildOverviews(
                 nBands, panBandList, pfnProgress, pProgressData );
         else
             return CleanOverviews();
+    }
+
+/* -------------------------------------------------------------------- */
+/*      libtiff 3.X has issues when generating interleaved overviews.   */
+/*      so generate them one after another one.                         */
+/* -------------------------------------------------------------------- */
+#ifndef BIGTIFF_SUPPORT
+    if( nOverviews > 1 )
+    {
+        double* padfOvrRasterFactor = (double*) CPLMalloc(sizeof(double) * nOverviews);
+        double dfTotal = 0;
+        for( i = 0; i < nOverviews; i++ )
+        {
+            if( panOverviewList[i] <= 0 )
+            {
+                CPLError(CE_Failure, CPLE_AppDefined,
+                         "Invalid overview factor : %d", panOverviewList[i]);
+                eErr = CE_Failure;
+                break;
+            }
+            padfOvrRasterFactor[i] = 1.0 / (panOverviewList[i] * panOverviewList[i]);
+            dfTotal += padfOvrRasterFactor[i];
+        }
+
+        double dfAcc = 0.0;
+        for( i = 0; i < nOverviews && eErr == CE_None; i++ )
+        {
+            void *pScaledProgressData;
+            pScaledProgressData = 
+                GDALCreateScaledProgress( dfAcc / dfTotal, 
+                                          (dfAcc + padfOvrRasterFactor[i]) / dfTotal,
+                                         pfnProgress, pProgressData );
+            dfAcc += padfOvrRasterFactor[i];
+
+            eErr = IBuildOverviews( 
+                    pszResampling, 1, &panOverviewList[i], 
+                    nBands, panBandList, GDALScaledProgress, pScaledProgressData );
+
+            GDALDestroyScaledProgress(pScaledProgressData);
+        }
+
+        CPLFree(padfOvrRasterFactor);
+
+        return eErr;
+    }
+#endif
+
+/* -------------------------------------------------------------------- */
+/*      Initialize progress counter.                                    */
+/* -------------------------------------------------------------------- */
+    if( !pfnProgress( 0.0, NULL, pProgressData ) )
+    {
+        CPLError( CE_Failure, CPLE_UserInterrupt, "User terminated" );
+        return CE_Failure;
     }
 
 /* -------------------------------------------------------------------- */
@@ -4615,6 +4690,29 @@ CPLErr GTiffDataset::IBuildOverviews(
     return eErr;
 }
 
+/************************************************************************/
+/*                      GTiffWriteDummyGeokeyDirectory()                */
+/************************************************************************/
+
+static void GTiffWriteDummyGeokeyDirectory(TIFF* hTIFF)
+{
+    // If we have existing geokeys, try to wipe them
+    // by writing a dummy geokey directory. (#2546)
+    uint16 *panVI = NULL;
+    uint16 nKeyCount;
+
+    if( TIFFGetField( hTIFF, TIFFTAG_GEOKEYDIRECTORY, 
+                        &nKeyCount, &panVI ) )
+    {
+        GUInt16 anGKVersionInfo[4] = { 1, 1, 0, 0 };
+        double  adfDummyDoubleParams[1] = { 0.0 };
+        TIFFSetField( hTIFF, TIFFTAG_GEOKEYDIRECTORY, 
+                        4, anGKVersionInfo );
+        TIFFSetField( hTIFF, TIFFTAG_GEODOUBLEPARAMS, 
+                        1, adfDummyDoubleParams );
+        TIFFSetField( hTIFF, TIFFTAG_GEOASCIIPARAMS, "" );
+    }
+}
 
 /************************************************************************/
 /*                          WriteGeoTIFFInfo()                          */
@@ -4634,6 +4732,32 @@ void GTiffDataset::WriteGeoTIFFInfo()
         bPointGeoIgnore = 
             CSLTestBoolean( CPLGetConfigOption("GTIFF_POINT_GEO_IGNORE",
                                                "FALSE") );
+    }
+
+    if( bForceUnsetGT )
+    {
+        bNeedsRewrite = TRUE;
+        bForceUnsetGT = FALSE;
+
+#ifdef HAVE_UNSETFIELD
+        TIFFUnsetField( hTIFF, TIFFTAG_GEOPIXELSCALE );
+        TIFFUnsetField( hTIFF, TIFFTAG_GEOTIEPOINTS );
+        TIFFUnsetField( hTIFF, TIFFTAG_GEOTRANSMATRIX );
+#endif
+    }
+
+    if( bForceUnsetProjection )
+    {
+        bNeedsRewrite = TRUE;
+        bForceUnsetProjection = FALSE;
+
+#ifdef HAVE_UNSETFIELD
+        TIFFUnsetField( hTIFF, TIFFTAG_GEOKEYDIRECTORY );
+        TIFFUnsetField( hTIFF, TIFFTAG_GEODOUBLEPARAMS );
+        TIFFUnsetField( hTIFF, TIFFTAG_GEOASCIIPARAMS );
+#else
+        GTiffWriteDummyGeokeyDirectory(hTIFF);
+#endif
     }
 
 /* -------------------------------------------------------------------- */
@@ -4761,21 +4885,8 @@ void GTiffDataset::WriteGeoTIFFInfo()
         bNeedsRewrite = TRUE;
 
         // If we have existing geokeys, try to wipe them
-        // by writing a dummy goekey directory. (#2546)
-        uint16 *panVI = NULL;
-        uint16 nKeyCount;
-
-        if( TIFFGetField( hTIFF, TIFFTAG_GEOKEYDIRECTORY, 
-                          &nKeyCount, &panVI ) )
-        {
-            GUInt16 anGKVersionInfo[4] = { 1, 1, 0, 0 };
-            double  adfDummyDoubleParams[1] = { 0.0 };
-            TIFFSetField( hTIFF, TIFFTAG_GEOKEYDIRECTORY, 
-                          4, anGKVersionInfo );
-            TIFFSetField( hTIFF, TIFFTAG_GEODOUBLEPARAMS, 
-                          1, adfDummyDoubleParams );
-            TIFFSetField( hTIFF, TIFFTAG_GEOASCIIPARAMS, "" );
-        }
+        // by writing a dummy geokey directory. (#2546)
+        GTiffWriteDummyGeokeyDirectory(hTIFF);
 
         psGTIF = GTIFNew( hTIFF );  
 
@@ -5044,11 +5155,10 @@ int  GTiffDataset::WriteMetadata( GDALDataset *poSrcDS, TIFF *hTIFF,
             }
         }
 
-        int bSuccess;
-        double dfOffset = poBand->GetOffset( &bSuccess );
+        double dfOffset = poBand->GetOffset();
         double dfScale = poBand->GetScale();
 
-        if( bSuccess && (dfOffset != 0.0 || dfScale != 1.0) )
+        if( dfOffset != 0.0 || dfScale != 1.0 )
         {
             char szValue[128];
 
@@ -5064,6 +5174,14 @@ int  GTiffDataset::WriteMetadata( GDALDataset *poSrcDS, TIFF *hTIFF,
         if (pszUnitType != NULL && pszUnitType[0] != '\0')
             AppendMetadataItem( &psRoot, &psTail, "UNITTYPE", pszUnitType, nBand, 
                                 "unittype", "" );
+
+
+        if (strlen(poBand->GetDescription()) > 0) 
+        {
+            AppendMetadataItem( &psRoot, &psTail, "DESCRIPTION", 
+                                poBand->GetDescription(), nBand, 
+                                "description", "" );
+        }
     }
 
 /* -------------------------------------------------------------------- */
@@ -5196,6 +5314,7 @@ void GTiffDataset::PushMetadataToPam()
             poBand->GDALPamRasterBand::SetOffset( poBand->GetOffset() );
             poBand->GDALPamRasterBand::SetScale( poBand->GetScale() );
             poBand->GDALPamRasterBand::SetUnitType( poBand->GetUnitType() );
+            poBand->GDALPamRasterBand::SetDescription( poBand->GetDescription() );
         }
     }
 }
@@ -5645,6 +5764,8 @@ GDALDataset *GTiffDataset::Open( GDALOpenInfo * poOpenInfo )
 
     poDS->bMetadataChanged = FALSE;
     poDS->bGeoTIFFInfoChanged = FALSE;
+    poDS->bForceUnsetGT = FALSE;
+    poDS->bForceUnsetProjection = FALSE;
 
 /* -------------------------------------------------------------------- */
 /*      Check for external overviews.                                   */
@@ -5790,6 +5911,8 @@ void GTiffDataset::LookForProjection()
     }
 
     bGeoTIFFInfoChanged = FALSE;
+    bForceUnsetGT = FALSE;
+    bForceUnsetProjection = FALSE;
 }
 
 /************************************************************************/
@@ -6533,6 +6656,8 @@ CPLErr GTiffDataset::OpenOffset( TIFF *hTIFFIn,
         
         CPLFree( pszTabWKT );
         bGeoTIFFInfoChanged = FALSE;
+        bForceUnsetGT = FALSE;
+        bForceUnsetProjection = FALSE;
     }
 
 /* -------------------------------------------------------------------- */
@@ -6746,6 +6871,8 @@ CPLErr GTiffDataset::OpenOffset( TIFF *hTIFFIn,
                         poBand->SetOffset( CPLAtofM(pszUnescapedValue) );
                     else if( EQUAL(pszRole,"unittype") )
                         poBand->SetUnitType( pszUnescapedValue );
+                    else if( EQUAL(pszRole,"description") )
+                        poBand->SetDescription( pszUnescapedValue );
                     else
                     {
                         if( bIsXML )
@@ -8346,9 +8473,13 @@ GTiffDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
 
     osFileName += pszFilename;
 
-    poDS = (GTiffDataset *) GDALOpen( osFileName, GA_Update );
+    GDALOpenInfo oOpenInfo( osFileName, GA_Update );
+    poDS = (GTiffDataset *) Open(&oOpenInfo);
     if( poDS == NULL )
-        poDS = (GTiffDataset *) GDALOpen( osFileName, GA_ReadOnly );
+    {
+        oOpenInfo.eAccess = GA_ReadOnly;
+        poDS = (GTiffDataset *) Open(&oOpenInfo);
+    }
 
     if ( poDS == NULL )
     {
@@ -8421,6 +8552,8 @@ GTiffDataset::CreateCopy( const char * pszFilename, GDALDataset *poSrcDS,
     /* To avoid unnecessary directory rewriting */
     poDS->bMetadataChanged = FALSE;
     poDS->bGeoTIFFInfoChanged = FALSE;
+    poDS->bForceUnsetGT = FALSE;
+    poDS->bForceUnsetProjection = FALSE;
 
     /* We must re-set the compression level at this point, since it has */
     /* been lost a few lines above when closing the newly create TIFF file */
@@ -8746,7 +8879,12 @@ CPLErr GTiffDataset::SetProjection( const char * pszNewProjection )
         
         return CE_Failure;
     }
-    
+
+    bForceUnsetProjection = (
+         EQUAL(pszNewProjection, "") &&
+         pszProjection != NULL &&
+         !EQUAL(pszProjection, "") );
+
     CPLFree( pszProjection );
     pszProjection = CPLStrdup( pszNewProjection );
 
@@ -8779,6 +8917,20 @@ CPLErr GTiffDataset::SetGeoTransform( double * padfTransform )
 {
     if( GetAccess() == GA_Update )
     {
+        bForceUnsetGT = (
+            padfTransform[0] == 0.0 &&
+            padfTransform[1] == 1.0 &&
+            padfTransform[2] == 0.0 &&
+            padfTransform[3] == 0.0 &&
+            padfTransform[4] == 0.0 &&
+            padfTransform[5] == 1.0 &&
+          !(adfGeoTransform[0] == 0.0 &&
+            adfGeoTransform[1] == 1.0 &&
+            adfGeoTransform[2] == 0.0 &&
+            adfGeoTransform[3] == 0.0 &&
+            adfGeoTransform[4] == 0.0 &&
+            adfGeoTransform[5] == 1.0) );
+
         memcpy( adfGeoTransform, padfTransform, sizeof(double)*6 );
         bGeoTransformValid = TRUE;
         bGeoTIFFInfoChanged = TRUE;
@@ -9477,13 +9629,14 @@ static void GTiffTagExtender(TIFF *tif)
 #include <dlfcn.h>
 #endif
 
+static void* hGTiffOneTimeInitMutex = NULL;
+
 int GTiffOneTimeInit()
 
 {
     static int bInitIsOk = TRUE;
     static int bOneTimeInitDone = FALSE;
-    static void* hMutex = NULL;
-    CPLMutexHolder oHolder( &hMutex);
+    CPLMutexHolder oHolder( &hGTiffOneTimeInitMutex);
     if( bOneTimeInitDone )
         return bInitIsOk;
 
@@ -9519,7 +9672,7 @@ int GTiffOneTimeInit()
 
     // This only really needed if we are linked to an external libgeotiff
     // with its own (lame) file searching logic. 
-    SetCSVFilenameHook( GDALDefaultCSVFilename );
+    LibgeotiffOneTimeInit();
 
     return TRUE;
 }
@@ -9528,6 +9681,7 @@ int GTiffOneTimeInit()
 /*                        GDALDeregister_GTiff()                        */
 /************************************************************************/
 
+static
 void GDALDeregister_GTiff( GDALDriver * )
 
 {
@@ -9536,6 +9690,14 @@ void GDALDeregister_GTiff( GDALDriver * )
 #if defined(LIBGEOTIFF_VERSION) && LIBGEOTIFF_VERSION > 1150
     GTIFDeaccessCSV();
 #endif
+
+    if( hGTiffOneTimeInitMutex != NULL )
+    {
+        CPLDestroyMutex(hGTiffOneTimeInitMutex);
+        hGTiffOneTimeInitMutex = NULL;
+    }
+
+    LibgeotiffOneTimeCleanupMutex();
 }
 
 /************************************************************************/
@@ -9753,7 +9915,7 @@ void GDALRegister_GTiff()
                                    "Float64 CInt16 CInt32 CFloat32 CFloat64" );
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONOPTIONLIST, 
                                    szCreateOptions );
-
+        poDriver->SetMetadataItem( GDAL_DMD_SUBDATASETS, "YES" );
         poDriver->SetMetadataItem( GDAL_DCAP_VIRTUALIO, "YES" );
 
         poDriver->pfnOpen = GTiffDataset::Open;

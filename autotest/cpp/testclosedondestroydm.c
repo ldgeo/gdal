@@ -1,4 +1,5 @@
 #include <cpl_conv.h>
+#include <cpl_string.h>
 #include <gdal.h>
 #include <gdal_alg.h>
 
@@ -41,7 +42,11 @@ int main(int argc, char* argv[])
     GDALDatasetH hSrcDS;
     FILE* f;
 
-    CPLSetConfigOption("GDAL_SKIP", "GIF");
+    const char* pszGDAL_SKIP = CPLGetConfigOption("GDAL_SKIP", NULL);
+    if( pszGDAL_SKIP == NULL )
+        CPLSetConfigOption("GDAL_SKIP", "GIF");
+    else
+        CPLSetConfigOption("GDAL_SKIP", CPLSPrintf("%s GIF", pszGDAL_SKIP));
 
     GDALAllRegister();
 
@@ -173,6 +178,8 @@ int main(int argc, char* argv[])
     hDS = GDALOpen("RASTERLITE:../gdrivers/data/rasterlite_pyramids.sqlite,table=test,level=1", GA_ReadOnly);
 
     OpenJPEG2000("../gdrivers/data/rgbwcmyk01_YeGeo_kakadu.jp2");
+    
+    hDS = GDALOpen("../gdrivers/tmp/cache/Europe 2001_OZF.map", GA_ReadOnly);
 
     CPLDebug("TEST","Call GDALDestroyDriverManager()");
     GDALDestroyDriverManager();

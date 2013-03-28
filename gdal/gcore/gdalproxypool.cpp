@@ -33,11 +33,6 @@
 
 CPL_CVSID("$Id$");
 
-/* Functions shared between gdalproxypool.cpp and gdaldataset.cpp */
-void** GDALGetphDLMutex();
-void GDALSetResponsiblePIDForCurrentThread(GIntBig responsiblePID);
-GIntBig GDALGetResponsiblePIDForCurrentThread();
-
 /* We *must* share the same mutex as the gdaldataset.cpp file, as we are */
 /* doing GDALOpen() calls that can indirectly call GDALOpenShared() on */
 /* an auxiliary dataset ... */
@@ -52,6 +47,8 @@ GIntBig GDALGetResponsiblePIDForCurrentThread();
 
 class GDALDatasetPool;
 static GDALDatasetPool* singleton = NULL;
+
+void GDALNullifyProxyPoolSingleton() { singleton = NULL; }
 
 struct _GDALProxyPoolCacheEntry
 {

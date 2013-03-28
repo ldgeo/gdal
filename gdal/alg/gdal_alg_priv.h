@@ -161,6 +161,18 @@ void* GDALRegisterTransformDeserializer(const char* pszTransformName,
                                        GDALTransformDeserializeFunc pfnDeserializeFunc);
 void GDALUnregisterTransformDeserializer(void* pData);
 
+void GDALCleanupTransformDeserializerMutex();
+
+/* Transformer cloning */
+
+void* GDALCloneTPSTransformer( void *pTransformArg );
+void* GDALCloneGenImgProjTransformer( void *pTransformArg );
+void* GDALCloneApproxTransformer( void *pTransformArg );
+/* TODO : GDALCloneGeoLocTransformer? , GDALCloneRPCTransformer? */ 
+
+
+void CPL_DLL * GDALCloneTransformer( void *pTranformerArg );
+
 /************************************************************************/
 /*      Float comparison function.                                      */
 /************************************************************************/

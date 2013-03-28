@@ -6,7 +6,7 @@
  * Author:   Martin Landa, landa.martin gmail.com
  *
  ******************************************************************************
- * Copyright (c) 2012, Martin Landa <landa.martin gmail.com>
+ * Copyright (c) 2012-2013, Martin Landa <landa.martin gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -35,8 +35,6 @@
 #include "cpl_conv.h"
 #include "cpl_error.h"
 
-#ifdef HAVE_SQLITE
-
 /*!
   \brief VFKFeatureSQLite constructor (from DB)
 
@@ -47,7 +45,7 @@
 VFKFeatureSQLite::VFKFeatureSQLite(IVFKDataBlock *poDataBlock) : IVFKFeature(poDataBlock)
 {
     m_hStmt  = NULL;
-    m_nIndex = m_poDataBlock->GetFeatureCount();
+    m_iRowId = m_poDataBlock->GetFeatureCount() + 1; /* starts at 1 */
 
     /* set FID from DB */
     SetFIDFromDB(); /* -> m_nFID */
@@ -57,13 +55,13 @@ VFKFeatureSQLite::VFKFeatureSQLite(IVFKDataBlock *poDataBlock) : IVFKFeature(poD
   \brief VFKFeatureSQLite constructor 
 
   \param poDataBlock pointer to related IVFKDataBlock
-  \param nIndex feature index (starts at 0)
+  \param iRowId feature DB rowid (starts at 1)
   \param nFID feature id
 */
-VFKFeatureSQLite::VFKFeatureSQLite(IVFKDataBlock *poDataBlock, int nIndex, long nFID) : IVFKFeature(poDataBlock)
+VFKFeatureSQLite::VFKFeatureSQLite(IVFKDataBlock *poDataBlock, int iRowId, long nFID) : IVFKFeature(poDataBlock)
 {
     m_hStmt  = NULL;
-    m_nIndex = nIndex;
+    m_iRowId = iRowId;
     m_nFID   = nFID;
 }
 
@@ -74,8 +72,8 @@ OGRErr VFKFeatureSQLite::SetFIDFromDB()
 {
     CPLString   osSQL;
     
-    osSQL.Printf("SELECT ogr_fid FROM '%s' WHERE _rowid_ = %d",
-                 m_poDataBlock->GetName(), m_nIndex + 1);
+    osSQL.Printf("SELECT %s FROM %s WHERE rowid = %d",
+                 FID_COLUMN, m_poDataBlock->GetName(), m_iRowId);
     if (ExecuteSQL(osSQL.c_str()) != OGRERR_NONE)
         return OGRERR_FAILURE;
 
@@ -100,8 +98,7 @@ void VFKFeatureSQLite::FinalizeSQL()
 
   \param pszSQLCommand SQL command string
 
-  \return OGRERR_NONE on success
-  \return OGRERR_FAILURE on error
+  \return OGRERR_NONE on success or OGRERR_FAILURE on error
 */
 OGRErr VFKFeatureSQLite::ExecuteSQL(const char *pszSQLCommand)
 {
@@ -149,7 +146,7 @@ VFKFeatureSQLite::VFKFeatureSQLite(const VFKFeature *poVFKFeature) : IVFKFeature
 {
     m_nFID   = poVFKFeature->m_nFID;
     m_hStmt  = NULL;
-    m_nIndex = m_poDataBlock->GetFeatureCount();
+    m_iRowId = m_poDataBlock->GetFeatureCount() + 1; /* starts at 1 */
 }
 
 /*!
@@ -157,8 +154,7 @@ VFKFeatureSQLite::VFKFeatureSQLite(const VFKFeature *poVFKFeature) : IVFKFeature
 
   \todo Implement (really needed?)
   
-  \return TRUE on success
-  \return FALSE on failure
+  \return TRUE on success or FALSE on failure
 */
 bool VFKFeatureSQLite::LoadGeometryPoint()
 {
@@ -170,8 +166,7 @@ bool VFKFeatureSQLite::LoadGeometryPoint()
 
   \todo Implement (really needed?)
 
-  \return TRUE on success
-  \return FALSE on failure
+  \return TRUE on success or FALSE on failure
 */
 bool VFKFeatureSQLite::LoadGeometryLineStringSBP()
 {
@@ -183,8 +178,7 @@ bool VFKFeatureSQLite::LoadGeometryLineStringSBP()
 
   \todo Implement (really needed?)
 
-  \return TRUE on success
-  \return FALSE on failure
+  \return TRUE on success or FALSE on failure
 */
 bool VFKFeatureSQLite::LoadGeometryLineStringHP()
 {
@@ -196,8 +190,7 @@ bool VFKFeatureSQLite::LoadGeometryLineStringHP()
 
   \todo Implement (really needed?)
 
-  \return TRUE on success
-  \return FALSE on failure
+  \return TRUE on success or FALSE on failure
 */
 bool VFKFeatureSQLite::LoadGeometryPolygon()
 {
@@ -209,19 +202,20 @@ bool VFKFeatureSQLite::LoadGeometryPolygon()
 
   \param poFeature pointer to OGR feature
 
-  \return OGRERR_NONE on success
-  \return OGRERR_FAILURE on failure
+  \return OGRERR_NONE on success or OGRERR_FAILURE on failure
 */
 OGRErr VFKFeatureSQLite::LoadProperties(OGRFeature *poFeature)
 {
     CPLString   osSQL;
 
-    osSQL.Printf("SELECT * FROM '%s' WHERE _rowid_ = %d",
-                 m_poDataBlock->GetName(), m_nIndex + 1);
+    osSQL.Printf("SELECT * FROM %s WHERE rowid = %d",
+                 m_poDataBlock->GetName(), m_iRowId);
     if (ExecuteSQL(osSQL.c_str()) != OGRERR_NONE)
         return OGRERR_FAILURE;
 
     for (int iField = 0; iField < m_poDataBlock->GetPropertyCount(); iField++) {
+	if (sqlite3_column_type(m_hStmt, iField) == SQLITE_NULL) /* skip null values */
+            continue;
         OGRFieldType fType = poFeature->GetDefnRef()->GetFieldDefn(iField)->GetType();
         if (fType == OFTInteger)
             poFeature->SetField(iField,
@@ -238,5 +232,3 @@ OGRErr VFKFeatureSQLite::LoadProperties(OGRFeature *poFeature)
 
     return OGRERR_NONE;
 }
-
-#endif // HAVE_SQLITE

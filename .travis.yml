@@ -7,56 +7,54 @@ language: cpp
 compiler:
   - clang
 
-env:
-    OGR_PG_CONNECTION_STRING="dbname=autotest user=postgres"
-
+# remove libogdi3.2-dev : it pulls projects.h from PROJ.4 which no longer exists
 before_install:
   - sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
   - sudo add-apt-repository -y ppa:marlam/gta
   - sudo apt-get update -qq
-  - sudo apt-get install -qq postgis libpq-dev libpng12-dev libjpeg-dev libgif-dev liblzma-dev libgeos-dev libcurl4-gnutls-dev libproj-dev libxml2-dev libexpat-dev libxerces-c-dev libnetcdf-dev netcdf-bin libpoppler-dev libspatialite-dev gpsbabel swig libhdf4-alt-dev libhdf5-serial-dev libogdi3.2-dev libmysqlclient-dev libpodofo-dev poppler-utils libfreexl-dev unixodbc-dev libwebp-dev openjdk-7-jdk libepsilon-dev libgta-dev liblcms2-2
+  - sudo apt-get install -qq postgis libpq-dev libpng12-dev libjpeg-dev libgif-dev liblzma-dev libgeos-dev libcurl4-gnutls-dev libproj-dev libxml2-dev libexpat-dev libxerces-c-dev libnetcdf-dev netcdf-bin libpoppler-dev libspatialite-dev gpsbabel swig libhdf4-alt-dev libhdf5-serial-dev libpodofo-dev poppler-utils libfreexl-dev unixodbc-dev libwebp-dev openjdk-7-jdk libepsilon-dev libgta-dev liblcms2-2 libpcre3-dev
   - psql -c "drop database if exists autotest" -U postgres
   - psql -c "create database autotest" -U postgres
   - psql -c "create extension postgis" -d autotest -U postgres
   - mysql -e "create database autotest;"
   - mysql -e "GRANT ALL ON autotest.* TO 'root'@'localhost';" -u root
   - mysql -e "GRANT ALL ON autotest.* TO 'travis'@'localhost';" -u root
-  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/FileGDB_API_1_2-32.tar.gz
-  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/MrSID_DSDK-8.5.0.3422-linux.x86.gcc44.tar.gz
-  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/install-libecwj2-ubuntu12.04-32bit.tar.gz
-  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/install-libkml-r864-32bit.tar.gz
-  - wget http://even.rouault.free.fr/install-openjpeg-r2095-ubuntu12.04-32bit.tar.gz
-  - tar xzf MrSID_DSDK-8.5.0.3422-linux.x86.gcc44.tar.gz
-  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86.gcc44/Raster_DSDK/include/* /usr/local/include
-  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86.gcc44/Raster_DSDK/lib/* /usr/local/lib
-  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86.gcc44/Lidar_DSDK/include/* /usr/local/include
-  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86.gcc44/Lidar_DSDK/lib/* /usr/local/lib
-  - tar xzf FileGDB_API_1_2-32.tar.gz
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/FileGDB_API_1_2-64.tar.gz
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44.tar.gz
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/install-libecwj2-ubuntu12.04-64bit.tar.gz
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/install-libkml-r864-64bit.tar.gz
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/install-openjpeg-2.0.0-ubuntu12.04-64bit.tar.gz
+  - tar xzf MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44.tar.gz
+  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44/Raster_DSDK/include/* /usr/local/include
+  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44/Raster_DSDK/lib/* /usr/local/lib
+  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44/Lidar_DSDK/include/* /usr/local/include
+  - sudo cp -r MrSID_DSDK-8.5.0.3422-linux.x86-64.gcc44/Lidar_DSDK/lib/* /usr/local/lib
+  - tar xzf FileGDB_API_1_2-64.tar.gz
   - sudo cp -r FileGDB_API/include/* /usr/local/include
   - sudo cp -r FileGDB_API/lib/* /usr/local/lib
-  - tar xzf install-libecwj2-ubuntu12.04-32bit.tar.gz
+  - tar xzf install-libecwj2-ubuntu12.04-64bit.tar.gz
   - sudo cp -r install-libecwj2/include/* /usr/local/include
   - sudo cp -r install-libecwj2/lib/* /usr/local/lib
-  - tar xzf install-libkml-r864-32bit.tar.gz
+  - tar xzf install-libkml-r864-64bit.tar.gz
   - sudo cp -r install-libkml/include/* /usr/local/include
   - sudo cp -r install-libkml/lib/* /usr/local/lib
-  - tar xzf install-openjpeg-r2095-ubuntu12.04-32bit.tar.gz
+  - tar xzf install-openjpeg-2.0.0-ubuntu12.04-64bit.tar.gz
   - sudo cp -r install-openjpeg/include/* /usr/local/include
   - sudo cp -r install-openjpeg/lib/* /usr/local/lib
   - sudo ldconfig
 
 # installing PostGIS 2 from Ubuntu PPA draws libgdal1.9 dependency. We must install ourselves
 # in /usr too to avoid gdal version conflict. Might be fragile however
-# Do not use --with-jpeg12 since it conflicts with system libjpeg8 and causes crashes in tiff_ovr_43
+
 install:
   - cd gdal
-  - ./configure --prefix=/usr --without-libtool --enable-debug --with-python --with-poppler --with-podofo --with-spatialite --with-mysql --with-liblzma --with-webp --with-java --with-mdb --with-jvm-lib-add-rpath --with-epsilon --with-ecw=/usr/local --with-mrsid=/usr/local --with-mrsid-lidar=/usr/local --with-fgdb=/usr/local --with-libkml --with-gta --with-openjpeg=/usr/local
+  - ./configure --prefix=/usr --without-libtool --enable-debug --with-jpeg12 --with-python --with-poppler --with-podofo --with-spatialite --with-mysql --with-liblzma --with-webp --with-java --with-mdb --with-jvm-lib-add-rpath --with-epsilon --with-gta --with-ecw=/usr/local --with-mrsid=/usr/local --with-mrsid-lidar=/usr/local --with-fgdb=/usr/local --with-libkml--with-openjpeg=/usr/local
   - make -j3
   - cd apps
   - make test_ogrsf
   - cd ..
   - cd swig/java
-  - cat java.opt | sed "s/JAVA_HOME =.*/JAVA_HOME = \/usr\/lib\/jvm\/java-7-openjdk-i386\//" > java.opt.tmp
+  - cat java.opt | sed "s/JAVA_HOME =.*/JAVA_HOME = \/usr\/lib\/jvm\/java-7-openjdk-amd64\//" > java.opt.tmp
   - mv java.opt.tmp java.opt
   - make
   - cd ../..
@@ -64,6 +62,7 @@ install:
   - make generate
   - make
   - cd ../..
+  - sudo rm -f /usr/lib/libgdal.so*
   - sudo make install
   - sudo ldconfig
   - cd ../autotest/cpp
@@ -71,7 +70,7 @@ install:
   - cd ../../gdal
   - wget http://mdb-sqlite.googlecode.com/files/mdb-sqlite-1.0.2.tar.bz2
   - tar xjvf mdb-sqlite-1.0.2.tar.bz2
-  - sudo cp mdb-sqlite-1.0.2/lib/*.jar /usr/lib/jvm/java-7-openjdk-i386/jre/lib/ext
+  - sudo cp mdb-sqlite-1.0.2/lib/*.jar /usr/lib/jvm/java-7-openjdk-amd64/jre/lib/ext
 
 # When run in the same process after ogr_pgeo.py (with the MDB driver), FileGDB tests fail.
 # Run it in isolation
@@ -87,7 +86,7 @@ script:
 # CPP unit tests
   - cd ../autotest
   - cd cpp
-  - make quick_test
+  - GDAL_SKIP=JP2ECW make quick_test
   - cd ..
 # Download a sample file
   - mkdir -p ogr/tmp/cache/
@@ -100,14 +99,19 @@ script:
   - python ogr_fgdb.py
   - mkdir disabled
   - mv ogr_fgdb.* disabled
-# Run all the Python autotests
   - cd ..
-  - python run_all.py
+# Run ogr_pgeo.py in isolation from the rest
   - cd ogr
+  - python ogr_pgeo.py
+  - mv ogr_pgeo.* disabled
+  - cd ..
+# Run all the Python autotests
+  - GDAL_SKIP="JP2ECW ECW" python run_all.py
 # A bit messy, but force testing with libspatialite 4.0dev (that has been patched a bit to remove any hard-coded SRS definition so it is very small)
-  - wget http://even.rouault.free.fr/libspatialite4.0dev_ubuntu12.04-32bit_srs_stripped.tar.gz
-  - tar xzf libspatialite4.0dev_ubuntu12.04-32bit_srs_stripped.tar.gz
-  - ln -s libspatialite.so.5.0.1 libspatialite.so.3
+  - cd ogr
+  - wget http://s3.amazonaws.com/etc-data.koordinates.com/gdal-travisci/libspatialite4.0dev_ubuntu12.04-64bit_srs_stripped.tar.gz
+  - tar xzf libspatialite4.0dev_ubuntu12.04-64bit_srs_stripped.tar.gz
+  - ln -s install-libspatialite-4.0dev/lib/libspatialite.so.5.0.1 libspatialite.so.3
   - LD_LIBRARY_PATH=$PWD python ogr_sqlite.py
   - cd ..
 

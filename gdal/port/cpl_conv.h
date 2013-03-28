@@ -127,12 +127,6 @@ void CPL_DLL *CPLGetSymbol( const char *, const char * );
 int CPL_DLL CPLGetExecPath( char *pszPathBuf, int nMaxLength );
 
 /* -------------------------------------------------------------------- */
-/*      Spawn a process.                                                */
-/* -------------------------------------------------------------------- */
-
-int CPL_DLL CPLSystem( const char* pszApplicationName, const char* pszCommandLine );
-
-/* -------------------------------------------------------------------- */
 /*      Filename handling functions.                                    */
 /* -------------------------------------------------------------------- */
 const char CPL_DLL *CPLGetPath( const char * );
@@ -196,6 +190,7 @@ FILE CPL_DLL    *CPLOpenShared( const char *, const char *, int );
 void CPL_DLL     CPLCloseShared( FILE * );
 CPLSharedFileInfo CPL_DLL *CPLGetSharedList( int * );
 void CPL_DLL     CPLDumpSharedList( FILE * );
+void CPL_DLL     CPLCleanupSharedFileMutex();
 
 /* -------------------------------------------------------------------- */
 /*      DMS to Dec to DMS conversion.                                   */
@@ -228,6 +223,17 @@ CPLErr CPL_DLL CPLCloseFileInZip( void *hZip );
 CPLErr CPL_DLL CPLCloseZip( void *hZip );
 
 /* -------------------------------------------------------------------- */
+/*      ZLib compression                                                */
+/* -------------------------------------------------------------------- */
+
+void CPL_DLL *CPLZLibDeflate( const void* ptr, size_t nBytes, int nLevel,
+                              void* outptr, size_t nOutAvailableBytes,
+                              size_t* pnOutBytes );
+void CPL_DLL *CPLZLibInflate( const void* ptr, size_t nBytes,
+                              void* outptr, size_t nOutAvailableBytes,
+                              size_t* pnOutBytes );
+
+/* -------------------------------------------------------------------- */
 /*      XML validation.                                                 */
 /* -------------------------------------------------------------------- */
 int CPL_DLL CPLValidateXML(const char* pszXMLFilename,
@@ -251,7 +257,7 @@ public:
 private:
     char *pszOldLocale;
 
-    // Make it non-copyable
+    /* Make it non-copyable */
     CPLLocaleC(CPLLocaleC&);
     CPLLocaleC& operator=(CPLLocaleC&);
 };

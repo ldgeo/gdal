@@ -945,7 +945,12 @@ def ogr_csv_23():
     ds = None
 
     data = open('tmp/csvwrk/utf8.csv', 'rb').read()
-    if data[:6] != '\xef\xbb\xbfWKT':
+    if sys.version_info >= (3,0,0):
+        ogrtest.ret = False
+        exec("ogrtest.ret = (data[:6] == b'\\xef\\xbb\\xbfWKT')")
+    else:
+        ogrtest.ret = (data[:6] == '\xef\xbb\xbfWKT')
+    if not ogrtest.ret:
         gdaltest.post_reason("No UTF8 BOM header on output")
         return 'fail'
 
@@ -1032,7 +1037,7 @@ def ogr_csv_25():
 
     EXPECTED = 'foo,\n"windows newline:\r\nlinux newline:\nend of string:"\n'
 
-    data = open('tmp/csvwrk/newlines.csv', 'rb').read()
+    data = open('tmp/csvwrk/newlines.csv', 'rb').read().decode('ascii')
     if data != EXPECTED:
         gdaltest.post_reason("Newlines changed:\n\texpected=%s\n\tgot=     %s" % (repr(EXPECTED), repr(data)))
         return 'fail'
@@ -1065,10 +1070,60 @@ def ogr_csv_26():
 
     EXPECTED = 'foo,\n10.5000000000000000000000000\n'
 
-    data = open('tmp/csvwrk/num_padding.csv', 'rb').read()
+    data = open('tmp/csvwrk/num_padding.csv', 'rb').read().decode('ascii')
     if data != EXPECTED:
         gdaltest.post_reason("expected=%s got= %s" % (repr(EXPECTED), repr(data)))
         return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test Eurostat .TSV files
+
+def ogr_csv_27():
+
+    ds = ogr.Open('data/test_eurostat.tsv')
+    lyr = ds.GetLayer(0)
+    layer_defn = lyr.GetLayerDefn()
+    if layer_defn.GetFieldCount() != 8:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    expected_fields = [ ('unit', ogr.OFTString),
+                        ('geo', ogr.OFTString),
+                        ('time_2010', ogr.OFTReal),
+                        ('time_2010_flag', ogr.OFTString),
+                        ('time_2011', ogr.OFTReal),
+                        ('time_2011_flag', ogr.OFTString),
+                        ('time_2012', ogr.OFTReal),
+                        ('time_2012_flag', ogr.OFTString) ]
+    i = 0
+    for expected_field in expected_fields:
+        fld = layer_defn.GetFieldDefn(i)
+        if fld.GetName() != expected_field[0]:
+            print(fld.GetName())
+            print(expected_field[0])
+            gdaltest.post_reason('fail')
+            return 'fail'
+        if fld.GetType() != expected_field[1]:
+            print(fld.GetType())
+            print(expected_field[1])
+            gdaltest.post_reason('fail')
+            return 'fail'
+        i = i + 1
+
+    feat = lyr.GetNextFeature()
+    if feat.GetField('unit') != 'NBR' or \
+       feat.GetField('geo') != 'FOO' or \
+       feat.IsFieldSet('time_2010') or \
+       feat.IsFieldSet('time_2010_flag') or \
+       feat.GetField('time_2011') != 1 or \
+       feat.GetField('time_2011_flag') != 'u' or \
+       feat.GetField('time_2012') != 2.34 or \
+       feat.IsFieldSet('time_2012_flag') :
+            feat.DumpReadable()
+            gdaltest.post_reason('fail')
+            return 'fail'
 
     return 'success'
 
@@ -1128,6 +1183,7 @@ gdaltest_list = [
     ogr_csv_24,
     ogr_csv_25,
     ogr_csv_26,
+    ogr_csv_27,
     ogr_csv_cleanup ]
 
 if __name__ == '__main__':

@@ -33,13 +33,17 @@ void RegisterOGRSOSI() {
     OGRSFDriverRegistrar::GetRegistrar()->RegisterDriver( new OGRSOSIDriver );
 }
 
+static int nFYBAInitCounter = 0;
 
 /************************************************************************/
 /*                           OGRSOSIDriver()                           */
 /************************************************************************/
-
 OGRSOSIDriver::OGRSOSIDriver() {
-    LC_Init();  /* Init FYBA */
+    if ( nFYBAInitCounter == 0 )
+    {
+        LC_Init();  /* Init FYBA */
+    }
+    nFYBAInitCounter++;
 }
 
 /************************************************************************/
@@ -47,7 +51,11 @@ OGRSOSIDriver::OGRSOSIDriver() {
 /************************************************************************/
 
 OGRSOSIDriver::~OGRSOSIDriver() {
-    LC_Close(); /* Close FYBA */
+    nFYBAInitCounter--;
+    if ( nFYBAInitCounter == 0 )
+    {
+        LC_Close(); /* Close FYBA */
+    }
 }
 
 /************************************************************************/

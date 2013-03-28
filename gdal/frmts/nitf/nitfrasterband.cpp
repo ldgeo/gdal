@@ -904,6 +904,9 @@ NITFWrapperRasterBand::NITFWrapperRasterBand( NITFDataset * poDS,
     poBaseBand->GetBlockSize(&nBlockXSize, &nBlockYSize);
     poColorTable = NULL;
     eInterp = poBaseBand->GetColorInterpretation();
+    bIsJPEG = poBaseBand->GetDataset() != NULL &&
+              poBaseBand->GetDataset()->GetDriver() != NULL &&
+              EQUAL(poBaseBand->GetDataset()->GetDriver()->GetDescription(), "JPEG");
 }
 
 /************************************************************************/
@@ -962,6 +965,43 @@ GDALColorInterp NITFWrapperRasterBand::GetColorInterpretation()
 CPLErr NITFWrapperRasterBand::SetColorInterpretation( GDALColorInterp eInterp)
 {
     this->eInterp = eInterp;
+    if( poBaseBand->GetDataset() != NULL &&
+        poBaseBand->GetDataset()->GetDriver() != NULL &&
+        EQUAL(poBaseBand->GetDataset()->GetDriver()->GetDescription(), "JP2ECW") )
+        poBaseBand->SetColorInterpretation( eInterp );
     return CE_None;
 }
 
+/************************************************************************/
+/*                          GetOverviewCount()                          */
+/************************************************************************/
+
+int NITFWrapperRasterBand::GetOverviewCount()
+{
+    if( bIsJPEG )
+    {
+        if( ((NITFDataset*)poDS)->ExposeUnderlyingJPEGDatasetOverviews() )
+            return NITFProxyPamRasterBand::GetOverviewCount();
+        else
+            return GDALPamRasterBand::GetOverviewCount();
+    }
+    else
+        return NITFProxyPamRasterBand::GetOverviewCount();
+}
+
+/************************************************************************/
+/*                             GetOverview()                            */
+/************************************************************************/
+
+GDALRasterBand * NITFWrapperRasterBand::GetOverview(int iOverview)
+{
+    if( bIsJPEG )
+    {
+        if( ((NITFDataset*)poDS)->ExposeUnderlyingJPEGDatasetOverviews() )
+            return NITFProxyPamRasterBand::GetOverview(iOverview);
+        else
+            return GDALPamRasterBand::GetOverview(iOverview);
+    }
+    else
+        return NITFProxyPamRasterBand::GetOverview(iOverview);
+}

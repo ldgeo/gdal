@@ -630,7 +630,7 @@ GDALDataset *KmlSuperOverlayCreateCopy( const char * pszFilename, GDALDataset *p
             output_dir = CPLGetCurrentDir();
         }
     }
-    CPLString outDir = output_dir;
+    CPLString outDir = output_dir ? output_dir : "";
     CPLFree(output_dir);
     output_dir = NULL;
 
@@ -1471,7 +1471,7 @@ int KmlSuperOverlayFindRegionStart(CPLXMLNode* psNode,
                                    CPLXMLNode** ppsLink)
 {
     if( psNode == NULL || psNode->eType != CXT_Element )
-        return NULL;
+        return FALSE;
 
     CPLXMLNode* psRegion = NULL;
     CPLXMLNode* psLink = NULL;

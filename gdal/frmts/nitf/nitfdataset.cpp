@@ -94,6 +94,7 @@ NITFDataset::NITFDataset()
     papszCgmMDToWrite = NULL;
     
     bInLoadXML = FALSE;
+    bExposeUnderlyingJPEGDatasetOverviews = FALSE;
 }
 
 /************************************************************************/
@@ -717,16 +718,19 @@ GDALDataset *NITFDataset::OpenInternal( GDALOpenInfo * poOpenInfo,
             delete poDS;
             return NULL;
         }
-        
-        if( poDS->GetRasterXSize() != poDS->poJPEGDataset->GetRasterXSize()
-            || poDS->GetRasterYSize() != poDS->poJPEGDataset->GetRasterYSize())
+
+        /* In some circumstances, the JPEG image can be larger than the NITF */
+        /* (NCOLS, NROWS) dimensions (#5001), so accept it as a valid case */
+        /* But reject when it is smaller than the NITF dimensions. */
+        if( poDS->GetRasterXSize() > poDS->poJPEGDataset->GetRasterXSize()
+            || poDS->GetRasterYSize() > poDS->poJPEGDataset->GetRasterYSize())
         {
             CPLError( CE_Failure, CPLE_AppDefined,
-                      "JPEG data stream has not the same dimensions as the NITF file.");
+                    "JPEG data stream has smaller dimensions than the NITF file.");
             delete poDS;
             return NULL;
         }
-        
+
         poDS->poJPEGDataset->SetPamFlags( 
             poDS->poJPEGDataset->GetPamFlags() | GPF_NOSAVE );
 
@@ -1596,6 +1600,13 @@ GDALDataset *NITFDataset::OpenInternal( GDALOpenInfo * poOpenInfo,
         poDS->oOvManager.Initialize( poDS, ":::VIRTUAL:::" );
     else
         poDS->oOvManager.Initialize( poDS, pszFilename );
+
+    /* If there are PAM overviews, don't expose the underlying JPEG dataset */
+    /* overviews (in case of monoblock C3) */
+    if( poDS->GetRasterCount() > 0 && poDS->GetRasterBand(1) != NULL )
+        poDS->bExposeUnderlyingJPEGDatasetOverviews =
+            ((GDALPamRasterBand*)poDS->GetRasterBand(1))->
+                            GDALPamRasterBand::GetOverviewCount() == 0;
 
     return( poDS );
 }
@@ -3213,6 +3224,8 @@ CPLErr NITFDataset::IBuildOverviews( const char *pszResampling,
         osRSetVRT = "";
     }
 
+    bExposeUnderlyingJPEGDatasetOverviews = FALSE;
+
 /* -------------------------------------------------------------------- */
 /*      If we have an underlying JPEG2000 dataset (hopefully via        */
 /*      JP2KAK) we will try and build zero overviews as a way of        */
@@ -4036,7 +4049,8 @@ NITFDataset::NITFCreateCopy(
             char *pszName = NULL;
             const char *pszValue = CPLParseNameValue( papszSrcMD[iMD], 
                                                       &pszName );
-            if( CSLFetchNameValue( papszFullOptions, pszName+5 ) == NULL )
+            if( pszName != NULL &&
+                CSLFetchNameValue( papszFullOptions, pszName+5 ) == NULL )
                 papszFullOptions = 
                     CSLSetNameValue( papszFullOptions, pszName+5, pszValue );
             CPLFree(pszName);
@@ -5012,6 +5026,10 @@ static void NITFWriteTextSegments( const char *pszFilename,
 
         const char *pszHeaderBuffer = NULL;
 
+        pszTextToWrite = CPLParseNameValue( papszList[iOpt], NULL );
+        if( pszTextToWrite == NULL )
+            continue;
+
 /* -------------------------------------------------------------------- */
 /*      Locate corresponding header data in the buffer                  */
 /* -------------------------------------------------------------------- */
@@ -5020,9 +5038,15 @@ static void NITFWriteTextSegments( const char *pszFilename,
             if( !EQUALN(papszList[iOpt2],"HEADER_",7) )
                 continue;
 
-            char *pszHeaderKey, *pszDataKey;
+            char *pszHeaderKey = NULL, *pszDataKey = NULL;
             CPLParseNameValue( papszList[iOpt2], &pszHeaderKey );
             CPLParseNameValue( papszList[iOpt], &pszDataKey );
+            if( pszHeaderKey == NULL || pszDataKey == NULL )
+            {
+                CPLFree(pszHeaderKey);
+                CPLFree(pszDataKey);
+                continue;
+            }
 
             char *pszHeaderId, *pszDataId; //point to header and data number
             pszHeaderId = pszHeaderKey + 7;
@@ -5112,8 +5136,7 @@ static void NITFWriteTextSegments( const char *pszFilename,
 /* -------------------------------------------------------------------- */
 /*      Prepare and write text segment data.                            */
 /* -------------------------------------------------------------------- */
-        pszTextToWrite = CPLParseNameValue( papszList[iOpt], NULL );
-        
+
         int nTextLength = (int) strlen(pszTextToWrite);
         if (nTextLength > 99998)
         {
@@ -5629,6 +5652,7 @@ void GDALRegister_NITF()
 
         poDriver->SetMetadataItem( GDAL_DMD_HELPTOPIC, "frmt_nitf.html" );
         poDriver->SetMetadataItem( GDAL_DMD_EXTENSION, "ntf" );
+        poDriver->SetMetadataItem( GDAL_DMD_SUBDATASETS, "YES" );
         poDriver->SetMetadataItem( GDAL_DMD_CREATIONDATATYPES, 
                                    "Byte UInt16 Int16 UInt32 Int32 Float32" );
 

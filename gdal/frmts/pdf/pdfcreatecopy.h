@@ -97,19 +97,27 @@ class GDALPDFLayerDesc
         std::vector<CPLString> aFeatureNames;
 };
 
+class GDALPDFRasterDesc
+{
+    public:
+        int          nOCGRasterId;
+        std::vector<GDALPDFImageDesc> asImageDesc;
+};
+
 class GDALPDFPageContext
 {
     public:
-        GDALDataset* poSrcDS;
+        GDALDataset* poClippingDS;
         PDFCompressMethod eStreamCompressMethod;
         double       dfDPI;
         PDFMargins   sMargins;
         int          nPageId;
         int          nContentId;
         int          nResourcesId;
-        std::vector<GDALPDFImageDesc> asImageDesc;
         std::vector<GDALPDFLayerDesc> asVectorDesc;
-        int          nOCGRasterId;
+        std::vector<GDALPDFRasterDesc> asRasterDesc;
+        int          nAnnotsId;
+        std::vector<int> anAnnotationsId;
 };
 
 class GDALPDFOCGDesc
@@ -117,6 +125,7 @@ class GDALPDFOCGDesc
     public:
         int          nId;
         int          nParentId;
+        CPLString    osLayerName;
 };
 
 class GDALPDFWriter
@@ -135,13 +144,17 @@ class GDALPDFWriter
     int nCatalogGen;
     int nXMPId;
     int nXMPGen;
+    int nNamesId;
     int bInWriteObj;
 
-    int nLastStartXRef;
+    vsi_l_offset nLastStartXRef;
     int nLastXRefSize;
     int bCanUpdate;
 
     GDALPDFPageContext oPageContext;
+
+    CPLString    osOffLayers;
+    CPLString    osExclusiveLayers;
 
     void    Init();
 
@@ -203,7 +216,8 @@ class GDALPDFWriter
                       PDFCompressMethod eStreamCompressMethod,
                       int bHasOGRData);
 
-       int WriteImagery(const char* pszLayerName,
+       int WriteImagery(GDALDataset* poDS,
+                        const char* pszLayerName,
                         PDFCompressMethod eCompressMethod,
                         int nPredictor,
                         int nJPEGQuality,
@@ -212,10 +226,20 @@ class GDALPDFWriter
                         GDALProgressFunc pfnProgress,
                         void * pProgressData);
 
+       int WriteClippedImagery(GDALDataset* poDS,
+                               const char* pszLayerName,
+                               PDFCompressMethod eCompressMethod,
+                               int nPredictor,
+                               int nJPEGQuality,
+                               const char* pszJPEG2000_DRIVER,
+                               int nBlockXSize, int nBlockYSize,
+                               GDALProgressFunc pfnProgress,
+                               void * pProgressData);
 #ifdef OGR_ENABLED
        int WriteOGRDataSource(const char* pszOGRDataSource,
                               const char* pszOGRDisplayField,
                               const char* pszOGRDisplayLayerNames,
+                              const char* pszOGRLinkField,
                               int bWriteOGRAttributes);
 
        GDALPDFLayerDesc StartOGRLayer(CPLString osLayerName,
@@ -225,6 +249,7 @@ class GDALPDFWriter
        int WriteOGRLayer(OGRDataSourceH hDS,
                          int iLayer,
                          const char* pszOGRDisplayField,
+                         const char* pszOGRLinkField,
                          CPLString osLayerName,
                          int bWriteOGRAttributes,
                          int& iObj);
@@ -233,14 +258,20 @@ class GDALPDFWriter
                            OGRFeatureH hFeat,
                            OGRCoordinateTransformationH hCT,
                            const char* pszOGRDisplayField,
+                           const char* pszOGRLinkField,
                            int bWriteOGRAttributes,
                            int& iObj,
                            int& iObjLayer);
 #endif
 
+       int  WriteJavascript(const char* pszJavascript);
+       int  WriteJavascriptFile(const char* pszJavascriptFile);
+
        int  EndPage(const char* pszExtraImages,
                     const char* pszExtraStream,
-                    const char* pszExtraLayerName);
+                    const char* pszExtraLayerName,
+                    const char* pszOffLayers,
+                    const char* pszExclusiveLayers);
 
        int  SetInfo(GDALDataset* poSrcDS,
                     char** papszOptions);

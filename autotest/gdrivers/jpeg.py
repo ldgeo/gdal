@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 ###############################################################################
 # $Id$
 #
@@ -32,6 +33,7 @@ import os
 import sys
 import gdal
 import string
+import shutil
 
 sys.path.append( '../pymod' )
 
@@ -43,7 +45,18 @@ import gdalconst
 
 def jpeg_1():
 
-    tst = gdaltest.GDALTest( 'JPEG', 'albania.jpg', 2, 17016 )
+    ds = gdal.Open( 'data/albania.jpg' )
+    cs = ds.GetRasterBand(2).Checksum()
+    if cs == 34298:
+        gdaltest.jpeg8 = True
+    else:
+        gdaltest.jpeg8 = False
+    ds = None
+
+    if gdaltest.jpeg8:
+        tst = gdaltest.GDALTest( 'JPEG', 'albania.jpg', 2, 34298 )
+    else:
+        tst = gdaltest.GDALTest( 'JPEG', 'albania.jpg', 2, 17016 )
     return tst.testOpen()
 
 ###############################################################################
@@ -104,7 +117,9 @@ def jpeg_3():
     ds = gdal.GetDriverByName('JPEG').CreateCopy( 'tmp/byte.jpg', ds,
                                                   options = options )
 
-    if ds.GetRasterBand(1).Checksum() != 4794:
+    expected_cs = 4794
+
+    if ds.GetRasterBand(1).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(1).Checksum())
         return 'fail'
@@ -260,7 +275,9 @@ def jpeg_7():
     ds = gdal.GetDriverByName('JPEG').CreateCopy( '/vsimem/byte.jpg', ds,
                                                   options = options )
 
-    if ds.GetRasterBand(1).Checksum() != 4794:
+    expected_cs = 4794
+
+    if ds.GetRasterBand(1).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(1).Checksum())
         return 'fail'
@@ -277,7 +294,9 @@ def jpeg_8():
 
     ds = gdal.Open( 'data/rgb_ntf_cmyk.jpg' )
 
-    if ds.GetRasterBand(1).Checksum() != 20385:
+    expected_cs = 20385
+
+    if ds.GetRasterBand(1).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(1).Checksum())
         return 'fail'
@@ -287,7 +306,9 @@ def jpeg_8():
         print(ds.GetRasterBand(1).GetRasterColorInterpretation())
         return 'fail'
 
-    if ds.GetRasterBand(2).Checksum() != 20865:
+    expected_cs = 20865
+
+    if ds.GetRasterBand(2).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(2).Checksum())
         return 'fail'
@@ -297,7 +318,9 @@ def jpeg_8():
         print(ds.GetRasterBand(2).GetRasterColorInterpretation())
         return 'fail'
 
-    if ds.GetRasterBand(3).Checksum() != 19441:
+    expected_cs = 19441
+
+    if ds.GetRasterBand(3).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(3).Checksum())
         return 'fail'
@@ -324,7 +347,9 @@ def jpeg_9():
     ds = gdal.Open( 'data/rgb_ntf_cmyk.jpg' )
     gdal.SetConfigOption('GDAL_JPEG_TO_RGB', 'YES')
 
-    if ds.GetRasterBand(1).Checksum() != 21187:
+    expected_cs = 21187
+
+    if ds.GetRasterBand(1).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(1).Checksum())
         return 'fail'
@@ -334,7 +359,9 @@ def jpeg_9():
         print(ds.GetRasterBand(1).GetRasterColorInterpretation())
         return 'fail'
 
-    if ds.GetRasterBand(2).Checksum() != 21054:
+    expected_cs = 21054
+
+    if ds.GetRasterBand(2).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(2).Checksum())
         return 'fail'
@@ -344,7 +371,9 @@ def jpeg_9():
         print(ds.GetRasterBand(2).GetRasterColorInterpretation())
         return 'fail'
 
-    if ds.GetRasterBand(3).Checksum() != 21499:
+    expected_cs = 21499
+
+    if ds.GetRasterBand(3).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(3).Checksum())
         return 'fail'
@@ -354,7 +383,9 @@ def jpeg_9():
         print(ds.GetRasterBand(3).GetRasterColorInterpretation())
         return 'fail'
 
-    if ds.GetRasterBand(4).Checksum() != 21069:
+    expected_cs = 21069
+
+    if ds.GetRasterBand(4).Checksum() != expected_cs:
         gdaltest.post_reason( 'Wrong checksum on copied image.')
         print(ds.GetRasterBand(4).Checksum())
         return 'fail'
@@ -508,6 +539,184 @@ def jpeg_15():
 
     return tst.testCreateCopy( vsimem = 1, interrupt_during_copy = True )
 
+###############################################################################
+# Test overview support
+
+def jpeg_16():
+
+    shutil.copy( 'data/albania.jpg', 'tmp/albania.jpg' )
+    try:
+        os.unlink( 'tmp/albania.jpg.ovr' )
+    except:
+        pass
+
+    ds = gdal.Open( 'tmp/albania.jpg' )
+    if ds.GetRasterBand(1).GetOverviewCount() != 1:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if ds.GetRasterBand(1).GetOverview(-1) is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if ds.GetRasterBand(1).GetOverview(1) is not None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    if ds.GetRasterBand(1).GetOverview(0) is None:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    # "Internal" overview
+
+    cs = ds.GetRasterBand(1).GetOverview(0).Checksum()
+    if gdaltest.jpeg8:
+        expected_cs = 34218
+    else:
+        expected_cs = 31892
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        return 'fail'
+
+    # Build external overviews
+    ds.BuildOverviews('NEAR', [2, 4])
+    if ds.GetRasterBand(1).GetOverviewCount() != 2:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    # Check updated checksum
+    cs = ds.GetRasterBand(1).GetOverview(0).Checksum()
+    if gdaltest.jpeg8:
+        expected_cs = 33698
+    else:
+        expected_cs = 32460
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        return 'fail'
+
+    ds = None
+
+    # Check we are using external overviews
+    ds = gdal.Open( 'tmp/albania.jpg' )
+    if ds.GetRasterBand(1).GetOverviewCount() != 2:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    cs = ds.GetRasterBand(1).GetOverview(0).Checksum()
+    if gdaltest.jpeg8:
+        expected_cs = 33698
+    else:
+        expected_cs = 32460
+    if cs != expected_cs:
+        gdaltest.post_reason('fail')
+        print(cs)
+        return 'fail'
+
+    ds = None
+
+    return 'success'
+
+###############################################################################
+# Test bogus files
+
+def jpeg_17():
+
+    gdal.ErrorReset()
+    gdal.PushErrorHandler('CPLQuietErrorHandler')
+    ds = gdal.Open('data/bogus.jpg')
+    gdal.PopErrorHandler()
+    if ds is not None or gdal.GetLastErrorMsg() == '':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    gdal.ErrorReset()
+    ds = gdal.Open('data/byte_corrupted.jpg')
+    gdal.PushErrorHandler('CPLQuietErrorHandler')
+    ds.GetRasterBand(1).Checksum()
+    gdal.PopErrorHandler()
+    if gdal.GetLastErrorMsg() == '':
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    return 'success'
+
+###############################################################################
+# Test situation where we cause a restart and need to reset scale
+
+def jpeg_18():
+
+    import struct
+
+    height = 1024
+    width = 1024
+    src_ds = gdal.GetDriverByName('GTiff').Create('/vsimem/jpeg_18.tif', width, height, 1)
+    for i in range(height):
+        data = struct.pack('B' * 1, int(i / (height / 256)))
+        src_ds.WriteRaster(0,i,width,1,data,1,1)
+
+    ds = gdal.GetDriverByName('JPEG').CreateCopy('/vsimem/jpeg_18.jpg', src_ds, options = ['QUALITY=99'])
+    src_ds = None
+    gdal.Unlink('/vsimem/jpeg_18.tif')
+
+    oldSize = gdal.GetCacheMax()
+    gdal.SetCacheMax(0)
+
+    line0 = ds.GetRasterBand(1).ReadRaster(0,0,width,1)
+    data = struct.unpack('B' * width, line0)
+    if abs(data[0] - 0) > 10:
+        return 'fail'
+    line1023 = ds.GetRasterBand(1).ReadRaster(0,height-1,width,1)
+    data = struct.unpack('B' * width, line1023)
+    if abs(data[0] - 255) > 10:
+        return 'fail'
+    line0_ovr1 = ds.GetRasterBand(1).GetOverview(1).ReadRaster(0,0,width / 4,1)
+    data = struct.unpack('B' * (width / 4), line0_ovr1)
+    if abs(data[0] - 0) > 10:
+        return 'fail'
+    line1023_bis = ds.GetRasterBand(1).ReadRaster(0,height-1,width,1)
+    if line1023_bis == line0 or line1023 != line1023_bis:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    line0_bis = ds.GetRasterBand(1).ReadRaster(0,0,width,1)
+    if line0 != line0_bis:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    line255_ovr1 = ds.GetRasterBand(1).GetOverview(1).ReadRaster(0,height/4 - 1,width / 4,1)
+    data = struct.unpack('B' * (width / 4), line255_ovr1)
+    if abs(data[0] - 255) > 10:
+        return 'fail'
+    line0_bis = ds.GetRasterBand(1).ReadRaster(0,0,width,1)
+    if line0 != line0_bis:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    line0_ovr1_bis = ds.GetRasterBand(1).GetOverview(1).ReadRaster(0,0,width/4,1)
+    if line0_ovr1 != line0_ovr1_bis:
+        gdaltest.post_reason('fail')
+        return 'fail'
+    line255_ovr1_bis = ds.GetRasterBand(1).GetOverview(1).ReadRaster(0,height/4 - 1,width / 4,1)
+    if line255_ovr1 != line255_ovr1_bis:
+        gdaltest.post_reason('fail')
+        return 'fail'
+
+    gdal.SetCacheMax(oldSize)
+
+    ds = None
+    gdal.Unlink('/vsimem/jpeg_18.jpg')
+
+    return 'success'
+
+###############################################################################
+# Cleanup
+
+def jpeg_cleanup():
+
+    try:
+        os.unlink( 'tmp/albania.jpg' )
+    except:
+        pass
+    try:
+        os.unlink( 'tmp/albania.jpg.ovr' )
+    except:
+        pass
+
+    return 'success'
+
 gdaltest_list = [
     jpeg_1,
     jpeg_2,
@@ -523,7 +732,11 @@ gdaltest_list = [
     jpeg_12,
     jpeg_13,
     jpeg_14,
-    jpeg_15 ]
+    jpeg_15,
+    jpeg_16,
+    jpeg_17,
+    jpeg_18,
+    jpeg_cleanup ]
 
 if __name__ == '__main__':
 

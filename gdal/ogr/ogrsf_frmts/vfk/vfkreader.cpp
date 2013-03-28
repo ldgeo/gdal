@@ -6,7 +6,7 @@
  * Author:   Martin Landa, landa.martin gmail.com
  *
  ******************************************************************************
- * Copyright (c) 2009-2010, 2012, Martin Landa <landa.martin gmail.com>
+ * Copyright (c) 2009-2010, 2012-2013, Martin Landa <landa.martin gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -58,11 +58,7 @@ IVFKReader::~IVFKReader()
 */
 IVFKReader *CreateVFKReader(const char *pszFilename)
 {
-#ifdef HAVE_SQLITE
     return new VFKReaderSQLite(pszFilename);
-#else
-    return new VFKReader(pszFilename);
-#endif
 }
 
 /*!
@@ -121,10 +117,12 @@ char *GetDataBlockName(const char *pszLine)
 
 /*!
   \brief Read a line from file
+ 
+  \param bRecode do recoding
 
   \return a NULL terminated string which should be freed with CPLFree().
 */
-char *VFKReader::ReadLine()
+char *VFKReader::ReadLine(bool bRecode)
 {
     const char *pszRawLine;
     char *pszLine;
@@ -133,9 +131,14 @@ char *VFKReader::ReadLine()
     if (pszRawLine == NULL)
         return NULL;
     
-    pszLine = CPLRecode(pszRawLine,
-                        m_bLatin2 ? "ISO-8859-2" : "WINDOWS-1250",
-                        CPL_ENC_UTF8);
+    if (bRecode)
+        pszLine = CPLRecode(pszRawLine,
+                            m_bLatin2 ? "ISO-8859-2" : "WINDOWS-1250",
+                            CPL_ENC_UTF8);
+    else {
+        pszLine = (char *) CPLMalloc(strlen(pszRawLine) + 1);
+        strcpy(pszLine, pszRawLine);
+    }
     
     return pszLine;
 }
@@ -145,8 +148,7 @@ char *VFKReader::ReadLine()
 
   Call VFKReader::OpenFile() before this function.
 
-  \return number of data blocks
-  \return -1 on error
+  \return number of data blocks or -1 on error
 */
 int VFKReader::ReadDataBlocks()
 {
@@ -159,12 +161,16 @@ int VFKReader::ReadDataBlocks()
     VSIFSeek(m_poFD, 0, SEEK_SET);
     while ((pszLine = ReadLine()) != NULL) {
         if (strlen(pszLine) < 2 || pszLine[0] != '&')
+        {
+            CPLFree(pszLine);
             continue;
+        }
         if (pszLine[1] == 'B') {
             pszBlockName = GetDataBlockName(pszLine);
             if (pszBlockName == NULL) { 
                 CPLError(CE_Failure, CPLE_NotSupported, 
                          "Corrupted data - line\n%s\n", pszLine);
+                CPLFree(pszLine);
                 return -1;
             }
             poNewDataBlock = (IVFKDataBlock *) CreateDataBlock(pszBlockName);
@@ -194,26 +200,27 @@ int VFKReader::ReadDataBlocks()
 
   Call VFKReader::OpenFile() before this function.
   
-  \return number of data records
-  \return -1 on error
+  \return number of data records or -1 on error
 */
 int VFKReader::ReadDataRecords(IVFKDataBlock *poDataBlock)
 {
     const char *pszName;
     char       *pszBlockName, *pszLine;
-    int         nLength;
+    long        iFID;
+    int         nLength, iLine, nSkipped, nDupl, nRecords;
     
+    CPLString pszMultiLine;
+
     VFKFeature *poNewFeature;
     
-    if (poDataBlock->GetFeatureCount() >= 0)
-        return -1;
-
     poDataBlock->SetFeatureCount(0);
-    poDataBlock->SetMaxFID(0);
     pszName = poDataBlock->GetName();
 
     VSIFSeek(m_poFD, 0, SEEK_SET);
+    iFID = 1L;
+    iLine = nSkipped = nDupl = nRecords = 0;
     while ((pszLine = ReadLine()) != NULL) {
+        iLine++;
         nLength = strlen(pszLine);
         if (nLength < 2)
             continue;
@@ -228,17 +235,18 @@ int VFKReader::ReadDataRecords(IVFKDataBlock *poDataBlock)
                     /* remove 0302 0244 (currency sign) from string */
                     pszLine[nLength - 2] = '\0';
                     
-                    CPLString pszMultiLine(pszLine);
+                    pszMultiLine.clear();
+                    pszMultiLine = pszLine;
                     CPLFree(pszLine);
                     
                     while ((pszLine = ReadLine()) != NULL &&
                            pszLine[strlen(pszLine) - 2] == '\302' &&
                            pszLine[strlen(pszLine) - 1] == '\244') {
-                        /* remove 0302 0244 (currency sign) from string */
-                        pszLine[strlen(pszLine) - 2] = '\0';
-                        
                         /* append line */
                         pszMultiLine += pszLine;
+                        /* remove 0302 0244 (currency sign) from string */
+                        pszMultiLine[strlen(pszLine) - 2] = '\0';
+
                         CPLFree(pszLine);
                     } 
                     pszMultiLine += pszLine;
@@ -250,12 +258,25 @@ int VFKReader::ReadDataRecords(IVFKDataBlock *poDataBlock)
                     pszLine[nLength] = '\0';
                 }
                 
-                poNewFeature = new VFKFeature(poDataBlock);
-                if (poNewFeature->SetProperties(pszLine))
-                    AddFeature(poDataBlock, poNewFeature);
-                else
-                    CPLError(CE_Warning, CPLE_AppDefined, 
-                             "Invalid VFK data record skipped.\n%s\n", pszLine);
+                poNewFeature = new VFKFeature(poDataBlock, iFID++);
+                if (poNewFeature->SetProperties(pszLine)) {
+                    if (AddFeature(poDataBlock, poNewFeature) != OGRERR_NONE) {
+                        CPLDebug("OGR-VFK", 
+                                 "%s: duplicated VFK data recored skipped (line %d).\n%s\n",
+                                 pszBlockName, iLine, pszLine);
+                        nDupl++;
+                        iFID--;
+                    }
+                    else {
+                        nRecords++;
+                    }
+                    delete poNewFeature;
+		}
+                else {
+                    CPLDebug("OGR-VFK", 
+                             "Invalid VFK data record skipped (line %d).\n%s\n", iLine, pszLine);
+		    nSkipped++;
+		}
             }
             CPLFree(pszBlockName);
         }
@@ -267,7 +288,19 @@ int VFKReader::ReadDataRecords(IVFKDataBlock *poDataBlock)
         CPLFree(pszLine);
     }
     
-    return poDataBlock->GetFeatureCount();
+    if (nSkipped > 0)
+	CPLError(CE_Warning, CPLE_AppDefined, 
+		 "%s: %d invalid VFK data records skipped",
+                 poDataBlock->GetName(), nSkipped);
+    if (nDupl > 0)
+	CPLError(CE_Warning, CPLE_AppDefined, 
+		 "%s: %d duplicated VFK data records skipped",
+                 poDataBlock->GetName(), nDupl);
+
+    CPLDebug("OGR_VFK", "VFKReader::ReadDataRecords(): name=%s n=%d",
+             poDataBlock->GetName(), nRecords);
+
+    return nRecords;
 }
 
 IVFKDataBlock *VFKReader::CreateDataBlock(const char *pszBlockName)
@@ -279,8 +312,7 @@ IVFKDataBlock *VFKReader::CreateDataBlock(const char *pszBlockName)
   \brief Add new data block
 
   \param poNewDataBlock pointer to VFKDataBlock instance
-
-  \return number of registred data blocks
+  \param pszDefn unused (FIXME ?)
 */
 void VFKReader::AddDataBlock(IVFKDataBlock *poNewDataBlock, const char *pszDefn)
 {
@@ -294,12 +326,13 @@ void VFKReader::AddDataBlock(IVFKDataBlock *poNewDataBlock, const char *pszDefn)
 /*!
   \brief Add feature
 
-  \param poNewDataBlock pointer to VFKDataBlock instance
-  \param poNewFeature pointer to VFKFeature instance
+  \param poDataBlock pointer to VFKDataBlock instance
+  \param poFeature pointer to VFKFeature instance
 */
-void VFKReader::AddFeature(IVFKDataBlock *poDataBlock, VFKFeature *poFeature)
+OGRErr VFKReader::AddFeature(IVFKDataBlock *poDataBlock, VFKFeature *poFeature)
 {
     poDataBlock->AddFeature(poFeature);
+    return OGRERR_NONE;
 }
 
 /*!
@@ -307,8 +340,7 @@ void VFKReader::AddFeature(IVFKDataBlock *poDataBlock, VFKFeature *poFeature)
 
   \param i index (starting with 0)
 
-  \return pointer to VFKDataBlock instance
-  \return NULL on failure
+  \return pointer to VFKDataBlock instance or NULL on failure
 */
 IVFKDataBlock *VFKReader::GetDataBlock(int i) const
 {
@@ -323,8 +355,7 @@ IVFKDataBlock *VFKReader::GetDataBlock(int i) const
 
   \param pszName data block name
 
-  \return pointer to VFKDataBlock instance
-  \return NULL on failure
+  \return pointer to VFKDataBlock instance or NULL on failure
 */
 IVFKDataBlock *VFKReader::GetDataBlock(const char *pszName) const
 {
@@ -407,8 +438,7 @@ void VFKReader::AddInfo(const char *pszLine)
 
   \param key key string
 
-  \return pointer to value string
-  \return NULL if key not found
+  \return pointer to value string or NULL if key not found
 */
 const char *VFKReader::GetInfo(const char *key)
 {

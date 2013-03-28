@@ -192,6 +192,7 @@ class CPL_DLL OGRSpatialReference
                                 int nUSGSAngleFormat = USGS_ANGLE_PACKEDDMS );
     OGRErr      importFromPanorama( long, long, long, double* );
     OGRErr      importFromOzi( const char *, const char *, const char * );
+    OGRErr      importFromOzi( const char * const* papszLines );
     OGRErr      importFromWMSAUTO( const char *pszAutoDef );
     OGRErr      importFromXML( const char * );
     OGRErr      importFromDict( const char *pszDict, const char *pszCode );
@@ -212,6 +213,7 @@ class CPL_DLL OGRSpatialReference
     OGRErr      Fixup();
 
     int         EPSGTreatsAsLatLong();
+    int         EPSGTreatsAsNorthingEasting();
     const char *GetAxis( const char *pszTargetKey, int iAxis, 
                          OGRAxisOrientation *peOrientation ) const;
     OGRErr      SetAxes( const char *pszTargetKey, 

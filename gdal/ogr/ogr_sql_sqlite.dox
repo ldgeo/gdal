@@ -1,6 +1,6 @@
 /*! \page ogr_sql_sqlite SQLite SQL dialect
 
-Since GDAL/OGR 2.0, the SQLite "dialect" can be used as an alternate SQL dialect to the
+Since GDAL/OGR 1.10, the SQLite "dialect" can be used as an alternate SQL dialect to the
 <b><a href="ogr_sql.html">OGR SQL dialect</a></b>.
 This assumes that GDAL/OGR is built with support for SQLite (>= 3.6), and preferably
 with <a href="http://www.gaia-gis.it/spatialite/">Spatialite</a> support too to benefit from spatial functions.<p>
@@ -26,8 +26,8 @@ refer to the following pages:
 
 The SELECT statement is used to fetch layer features (analogous to table
 rows in an RDBMS) with the result of the query represented as a temporary layer
-of features.   The layers of the datasource are analagous to tables in an 
-RDBMS and feature attributes are analagous to column values.  The simpliest
+of features.   The layers of the datasource are analogous to tables in an 
+RDBMS and feature attributes are analogous to column values.  The simplest
 form of OGR SQLITE SELECT statement looks like this:
 
 \code
@@ -59,7 +59,7 @@ indexed on the key field being used.<p>
 \subsection ogr_sql_sqlite_geometry Geometry field
 
 The <b>GEOMETRY</b> special field represents the geometry of the feature
-returned by OGRFeature::GetGeometryRef(). It can be explicitely specified
+returned by OGRFeature::GetGeometryRef(). It can be explicitly specified
 in the result column list of a SELECT, and is automatically selected if the
 * wildcard is used.<p>
 
@@ -125,27 +125,151 @@ OGRFeature(SELECT):2
   area (Real) = 5268.8125
 \endcode
 
+\subsection ogr_sql_sqlite_datasource_function OGR datasource SQL functions
+
+The <b>ogr_datasource_load_layers(datasource_name[, update_mode[, prefix]])</b>
+function can be used to automatically load all the layers of a datasource as
+<a href="http://gdal.org/ogr/drv_sqlite.html">VirtualOGR tables</a>.<p>
+
+\code
+sqlite> SELECT load_extension('libgdal.so');
+
+sqlite> SELECT load_extension('libspatialite.so');
+
+sqlite> SELECT ogr_datasource_load_layers('poly.shp');
+1
+sqlite> SELECT * FROM sqlite_master;
+table|poly|poly|0|CREATE VIRTUAL TABLE "poly" USING VirtualOGR('poly.shp', 0, 'poly')
+\endcode
+
 \subsection ogr_sql_sqlite_layer_function OGR layer SQL functions
 
 The following SQL functions are available and operate on a layer name :
-<b>ogr_layer_Extent()</b>, <b>ogr_layer_SRID()</b> and <b>ogr_layer_GeometryType()</b><p>
+<b>ogr_layer_Extent()</b>, <b>ogr_layer_SRID()</b>,
+<b>ogr_layer_GeometryType()</b> and <b>ogr_layer_FeatureCount()</b><p>
 
 \code
 SELECT ogr_layer_Extent('poly'), ogr_layer_SRID('poly') AS srid,
-       ogr_layer_GeometryType('poly') AS geomtype
+       ogr_layer_GeometryType('poly') AS geomtype, ogr_layer_FeatureCount('poly') AS count
 
 returns:
 
 OGRFeature(SELECT):0
   srid (Integer) = 40004
   geomtype (String) = POLYGON
+  count (Integer) = 10
   POLYGON ((478315.53125 4762880.5,481645.3125 4762880.5,481645.3125 4765610.5,478315.53125 4765610.5,478315.53125 4762880.5))
 \endcode
+
+\subsection ogr_sql_sqlite_compression_functions OGR compression functions
+
+<b>ogr_deflate(text_or_blob[, compression_level])</b> returns a binary blob
+compressed with the ZLib deflate algorithm. See CPLZLibDeflate()<p>
+
+<b>ogr_inflate(compressed_blob)</b> returns the decompressed binary blob,
+from a blob compressed with the ZLib deflate algorithm.
+If the decompressed binary is a string, use
+CAST(ogr_inflate(compressed_blob) AS VARCHAR). See CPLZLibInflate().<p>
+
+\subsection ogr_sql_sqlite_ogr_geocode_function OGR geocoding functions
+
+The following SQL functions are available : <b>ogr_geocode(...)</b> and <b>ogr_geocode_reverse(...)</b>.<p>
+
+<b>ogr_geocode(name_to_geocode [, field_to_return [, option1 [, option2, ...]]])</b> where
+name_to_geocode is a literal or a column name that must be geocoded. field_to_return if specified can be "geometry" for
+the geometry (default), or a field name of the layer returned by OGRGeocode(). The special field  "raw" can also be used
+to return the raw response (XML string) of the geocoding service.
+option1, option2, etc.. must be of the key=value format, and are options understood
+by OGRGeocodeCreateSession() or OGRGeocode().<p>
+
+This function internally uses the OGRGeocode() API. Refer to it for more details.
+
+\code
+SELECT ST_Centroid(ogr_geocode('Paris'))
+
+returns:
+
+OGRFeature(SELECT):0
+  POINT (2.342878767069653 48.85661793020374)
+
+\endcode
+
+\code
+ogrinfo cities.csv -dialect sqlite -sql "SELECT *, ogr_geocode(city, 'country') AS country, ST_Centroid(ogr_geocode(city)) FROM cities"
+
+returns:
+
+OGRFeature(SELECT):0
+  id (Real) = 1
+  city (String) = Paris
+  country (String) = France métropolitaine
+  POINT (2.342878767069653 48.85661793020374)
+
+OGRFeature(SELECT):1
+  id (Real) = 2
+  city (String) = London
+  country (String) = United Kingdom
+  POINT (-0.109369427546499 51.500506667319407)
+
+OGRFeature(SELECT):2
+  id (Real) = 3
+  city (String) = Rennes
+  country (String) = France métropolitaine
+  POINT (-1.68185153381778 48.111663929761093)
+
+OGRFeature(SELECT):3
+  id (Real) = 4
+  city (String) = Strasbourg
+  country (String) = France métropolitaine
+  POINT (7.767762859150757 48.571233274141846)
+
+OGRFeature(SELECT):4
+  id (Real) = 5
+  city (String) = New York
+  country (String) = United States of America
+  POINT (-73.938140243499049 40.663799577449979)
+
+OGRFeature(SELECT):5
+  id (Real) = 6
+  city (String) = Berlin
+  country (String) = Deutschland
+  POINT (13.402306623451983 52.501470321410636)
+
+OGRFeature(SELECT):6
+  id (Real) = 7
+  city (String) = Beijing
+  country (String) = 中华人民共和国
+  POINT (116.391195 39.9064702)
+
+OGRFeature(SELECT):7
+  id (Real) = 8
+  city (String) = Brasilia
+  country (String) = Brasil
+  POINT (-52.830435216371839 -10.828214867369699)
+
+OGRFeature(SELECT):8
+  id (Real) = 9
+  city (String) = Moscow
+  country (String) = Российская Федерация
+  POINT (37.367988106866868 55.556208255649558)
+\endcode
+
+<b>ogr_geocode_reverse(longitude, latitude, field_to_return [, option1 [, option2, ...]])</b> where
+longitude, latitude is the coordinate to query. field_to_return must be a field name of the layer
+returned by OGRGeocodeReverse() (for example 'display_name'). The special field  "raw" can also be used
+to return the raw response (XML string) of the geocoding service.
+option1, option2, etc.. must be of the key=value format, and are options understood
+by OGRGeocodeCreateSession() or OGRGeocodeReverse().<p>
+
+<b>ogr_geocode_reverse(geometry, field_to_return [, option1 [, option2, ...]])</b> is also accepted
+as an alternate syntax where geometry is a (Spatialite) point geometry.<p>
+
+This function internally uses the OGRGeocodeReverse() API. Refer to it for more details.
 
 \subsection ogr_sql_sqlite_spatial_index Spatialite spatial index
 
 Spatialite spatial index mechanism can be triggered by making sure a spatial index
-virtual table is mentionned in the SQL (of the form idx_layername_geometrycolumn), or
+virtual table is mentioned in the SQL (of the form idx_layername_geometrycolumn), or
 by using the more recent SpatialIndex from the VirtualSpatialIndex extension. In which
 case, a in-memory RTree will be built to be used to speed up the spatial queries.
 

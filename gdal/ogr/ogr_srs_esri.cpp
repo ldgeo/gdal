@@ -30,6 +30,7 @@
 #include "ogr_spatialref.h"
 #include "ogr_p.h"
 #include "cpl_csv.h"
+#include "cpl_multiproc.h"
 
 #include "ogr_srs_esri_names.h"
 
@@ -97,6 +98,7 @@ static const char *apszOrthographicMapping[] = {
     NULL, NULL };
 
 static char **papszDatumMapping = NULL;
+static void* hDatumMappingMutex = NULL;
  
 static const char *apszDefaultDatumMapping[] = {
     "6267", "North_American_1927", SRS_DN_NAD27,
@@ -376,6 +378,8 @@ void CleanupESRIDatumMappingTable()
         CSLDestroy( papszDatumMapping );
         papszDatumMapping = NULL;
     }
+
+    CPLDestroyMutex(hDatumMappingMutex);
 }
 CPL_C_END
 
@@ -386,6 +390,7 @@ CPL_C_END
 static void InitDatumMappingTable()
 
 {
+    CPLMutexHolderD(&hDatumMappingMutex);
     if( papszDatumMapping != NULL )
         return;
 
@@ -1467,7 +1472,7 @@ OGRErr OSRMorphToESRI( OGRSpatialReferenceH hSRS )
  * recommended for proper datum shift calculations):
  *
  * <b>GDAL_FIX_ESRI_WKT values</b>
- * <table border=0>
+ * <table border="0">
  * <tr><td>&nbsp;&nbsp;</td><td><b>TOWGS84</b></td><td>&nbsp;&nbsp;</td><td>
  * Adds missing TOWGS84 parameters (necessary for datum transformations),
  * based on named datum and spheroid values.</td></tr>
